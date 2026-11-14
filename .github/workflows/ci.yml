@@ -60,8 +60,6 @@ jobs:
         with:
           tool: cargo-ndk,flutter_rust_bridge_codegen@2.11.1
       - name: Prepare Android build
-        env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
         run: apps/mobile/tool/prepare_android.sh
       - name: Analyze Dart
         working-directory: apps/mobile

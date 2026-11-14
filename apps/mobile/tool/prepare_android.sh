@@ -47,6 +47,19 @@ dart run build_runner build --delete-conflicting-outputs
 
 echo "==> Rust core for Android ($TARGETS, $PROFILE)"
 cd "$ROOT"
+# GitHub runners set ANDROID_NDK_ROOT / ANDROID_NDK_LATEST_HOME; local SDKs
+# often only have ANDROID_HOME/ndk/<version>. Use whichever exists.
+if [ -z "${ANDROID_NDK_HOME:-}" ]; then
+  for cand in "${ANDROID_NDK_LATEST_HOME:-}" "${ANDROID_NDK_ROOT:-}"; do
+    [ -n "$cand" ] && [ -d "$cand" ] && { ANDROID_NDK_HOME="$cand"; break; }
+  done
+fi
+if [ -z "${ANDROID_NDK_HOME:-}" ] && [ -d "${ANDROID_HOME:-/nonexistent}/ndk" ]; then
+  ANDROID_NDK_HOME="$(ls -d "$ANDROID_HOME"/ndk/* | sort -V | tail -1)"
+fi
+[ -n "${ANDROID_NDK_HOME:-}" ] || { echo "Android NDK not found: set ANDROID_NDK_HOME" >&2; exit 1; }
+export ANDROID_NDK_HOME
+echo "    NDK: $ANDROID_NDK_HOME"
 NDK_ARGS=()
 for t in $TARGETS; do NDK_ARGS+=(-t "$t"); done
 PROFILE_ARG=()
