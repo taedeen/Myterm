@@ -167,6 +167,8 @@ class TerminalSession extends ChangeNotifier {
     } catch (_) {
       return;
     }
+    // Enter finishes a command: persist history shortly after.
+    if (bytes.contains(13)) state.saveSoon();
     refreshSuggestions();
   }
 
