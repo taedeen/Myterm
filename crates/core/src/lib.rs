@@ -13,6 +13,7 @@
 //! - [`scrub`]      secret-pattern filter for history              (3.3)
 //! - [`history`]    per-device command history with sync merge     (8.2)
 //! - [`completion`] suggestion engine                              (3.3)
+//! - [`cdtrack`]    working-directory tracking for combined `cd`s  (3.3)
 //! - [`sshkey`]     SSH public key / signature wire encoding       (3.4.1)
 //! - [`signer`]     hardware signer interface + host key policy    (3.4.1)
 //! - [`knownhosts`] trust-on-first-use host key checks             (3.4)
@@ -23,6 +24,7 @@
 //! - [`sha256`]     minimal SHA-256 used for fingerprints and audit
 
 pub mod audit;
+pub mod cdtrack;
 pub mod codec;
 pub mod completion;
 pub mod history;

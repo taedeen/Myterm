@@ -64,6 +64,12 @@ jobs:
       - name: Analyze Dart
         working-directory: apps/mobile
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
+      - name: Use the MyTerm dev signing key
+        # Same key on every build, so new APKs install as updates.
+        # See apps/mobile/android/signing/README.md.
+        run: |
+          mkdir -p ~/.android
+          cp apps/mobile/android/signing/myterm-dev.keystore ~/.android/debug.keystore
       - name: Build APK
         working-directory: apps/mobile
         run: flutter build apk --release

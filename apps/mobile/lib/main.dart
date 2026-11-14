@@ -40,7 +40,7 @@ class _MyTermAppState extends State<MyTermApp> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState s) {
     // Save on background; auto-lock when backgrounded with no live sessions.
     if (s == AppLifecycleState.paused && widget.state.unlocked) {
-      if (widget.state.sessions.isEmpty) {
+      if (widget.state.liveCount == 0) {
         widget.state.lock();
       } else {
         widget.state.save();
@@ -57,6 +57,7 @@ class _MyTermAppState extends State<MyTermApp> with WidgetsBindingObserver {
     );
     return MaterialApp(
       title: 'MyTerm',
+      navigatorKey: AppState.navigatorKey,
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: scheme,

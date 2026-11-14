@@ -8,6 +8,7 @@
 
 use std::io;
 
+use crate::cdtrack::CdTracker;
 use crate::inject::{self, CredentialMeta, InjectAudit, InjectDecision, SecretBuf, SessionState};
 use crate::prompt::{self, PromptKind};
 
@@ -42,6 +43,9 @@ pub struct Session<C: Channel> {
     inject_state: SessionState,
     /// Bytes of an escape sequence typed by the user (arrow keys etc.).
     in_escape: bool,
+    cd: CdTracker,
+    /// Combined `cd` commands waiting to be added to history.
+    derived: Vec<String>,
 }
 
 impl<C: Channel> Session<C> {
@@ -56,6 +60,8 @@ impl<C: Channel> Session<C> {
             line_reliable: true,
             inject_state: SessionState::default(),
             in_escape: false,
+            cd: CdTracker::new(),
+            derived: Vec::new(),
         }
     }
 
@@ -71,6 +77,19 @@ impl<C: Channel> Session<C> {
             let cut = self.tail.char_indices().nth(excess).map(|(i, _)| i).unwrap_or(0);
             self.tail.drain(..cut);
         }
+        if let Some(d) = self.cd.on_output(&self.tail, data) {
+            self.derived.push(d);
+        }
+    }
+
+    /// Combined `cd` commands to add to history (see [`crate::cdtrack`]).
+    pub fn take_derived(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.derived)
+    }
+
+    /// Current directory, when known.
+    pub fn cwd(&self) -> Option<&str> {
+        self.cd.cwd()
     }
 
     /// The prompt currently on screen.
@@ -106,6 +125,9 @@ impl<C: Channel> Session<C> {
             match b {
                 b'\r' | b'\n' => {
                     let line = String::from_utf8_lossy(&std::mem::take(&mut self.line)).into_owned();
+                    if let Some(d) = self.cd.on_enter(&line, self.line_reliable, self.line_prompt.is_hidden()) {
+                        self.derived.push(d);
+                    }
                     done = Some(CompletedCommand { line, prompt: self.line_prompt, reliable: self.line_reliable });
                     self.line_reliable = true;
                     self.line_prompt = PromptKind::None;
@@ -184,6 +206,33 @@ impl<C: Channel> Session<C> {
             decision,
             Some(InjectAudit { credential_id: cred.id.clone(), host_id: self.host_id.clone(), at_unix: now, prompt }),
         ))
+    }
+}
+
+#[cfg(test)]
+mod cd_tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct Sink;
+    impl Channel for Sink {
+        fn write(&mut self, _: &[u8]) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn session_derives_combined_cd_from_prompts() {
+        let mut s = Session::new("dbb", Sink);
+        s.on_output(b"t@dbb:~$ ");
+        for (typed, out) in [("cd docker_volumes\r", "cd docker_volumes\r\nt@dbb:~/docker_volumes$ "), ("cd MyJam\r", "cd MyJam\r\nt@dbb:~/docker_volumes/MyJam$ ")] {
+            // Echo arrives as the user types, then Enter, then the new prompt.
+            s.on_input(typed.as_bytes()).unwrap();
+            s.on_output(out.as_bytes());
+        }
+        assert_eq!(s.take_derived(), vec!["cd docker_volumes/MyJam".to_string()]);
+        assert!(s.take_derived().is_empty());
+        assert_eq!(s.cwd(), Some("~/docker_volumes/MyJam"));
     }
 }
 

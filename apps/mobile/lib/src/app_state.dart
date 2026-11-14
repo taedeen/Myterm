@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart' show ExternalLibrary;
 import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
@@ -10,13 +10,7 @@ import 'package:uuid/uuid.dart';
 import 'native.dart';
 import 'rust/api.dart';
 import 'rust/frb_generated.dart';
-
-/// A live terminal session the app is tracking.
-class LiveSession {
-  LiveSession({required this.id, required this.host});
-  final int id;
-  final HostDto host;
-}
+import 'terminal_session.dart';
 
 /// Owns the Rust core, the on-disk store and vault unlock state.
 ///
@@ -28,7 +22,14 @@ class AppState extends ChangeNotifier {
   late final MyTerm core;
   late final Directory _dir;
   Map<String, dynamic> _meta = {};
-  final List<LiveSession> sessions = [];
+  /// Open terminal sessions (connecting, live, or ended but not yet closed).
+  /// They belong to the app, not to a screen, so they survive navigation.
+  final List<TerminalSession> sessions = [];
+
+  /// App-wide navigator, for dialogs raised by sessions in the background.
+  static final navigatorKey = GlobalKey<NavigatorState>();
+
+  int get liveCount => sessions.where((s) => s.isLive).length;
   String _keybarProfileId = 'builtin-tmux';
   String get keybarProfileId => _keybarProfileId;
   set keybarProfileId(String id) {
@@ -130,25 +131,44 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> lock() async {
+    for (final s in List.of(sessions)) {
+      closeSession(s);
+    }
     await save();
     core.lock();
     notifyListeners();
   }
 
-  void addSession(LiveSession s) {
+  /// Creates a session for [host] and starts connecting.
+  TerminalSession openSession(HostDto host) {
+    final s = TerminalSession(state: this, host: host);
     sessions.add(s);
-    Native.keepAlive(sessions.length);
+    notifyListeners();
+    s.connect();
+    return s;
+  }
+
+  void sessionStarted(TerminalSession s) {
+    Native.keepAlive(liveCount);
     notifyListeners();
   }
 
-  void removeSession(int id) {
-    sessions.removeWhere((s) => s.id == id);
-    Native.keepAlive(sessions.length);
+  void sessionEnded(TerminalSession s) {
+    Native.keepAlive(liveCount);
     save();
     notifyListeners();
   }
 
-  int activeSessionsFor(String hostId) => sessions.where((s) => s.host.id == hostId).length;
+  /// Ends a session and removes it from the list.
+  void closeSession(TerminalSession s) {
+    s.disconnect();
+    sessions.remove(s);
+    s.release();
+    Native.keepAlive(liveCount);
+    notifyListeners();
+  }
+
+  int activeSessionsFor(String hostId) => sessions.where((s) => s.host.id == hostId && s.isLive).length;
 
   static String newId() => const Uuid().v4();
 
