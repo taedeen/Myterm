@@ -430,14 +430,19 @@ impl MyTerm {
         let params = KdfParams { m_cost_kib: kdf_m_kib, t_cost: kdf_t, p_cost: kdf_p, salt };
         let kek = vault::derive_password_key(master_password.as_bytes(), &params)?;
         let mk = vault::unwrap_master_key(&password_wrapped, &kek, "password")?;
-        self.st().vault.unlock(mk);
+        let mut st = self.st();
+        st.vault.unlock(mk);
+        // History is sealed in the vault; load it as soon as it can be read.
+        Self::load_history(&mut st);
         Ok(())
     }
 
     /// Everyday unlock: native code unwrapped MK with the Keystore key after biometrics.
     pub fn unlock_with_master_key(&self, master_key: Vec<u8>) -> anyhow::Result<()> {
         let bytes: [u8; 32] = master_key.as_slice().try_into().map_err(|_| anyhow::anyhow!("bad key length"))?;
-        self.st().vault.unlock(MasterKey::from_bytes(bytes));
+        let mut st = self.st();
+        st.vault.unlock(MasterKey::from_bytes(bytes));
+        Self::load_history(&mut st);
         Ok(())
     }
 
@@ -456,6 +461,10 @@ impl MyTerm {
     /// Seals history and audit into the vault, then returns everything as one blob.
     pub fn export_store(&self) -> anyhow::Result<StoreBlobs> {
         let mut st = self.st();
+        // Merge what is already saved before overwriting it, so history that
+        // was never loaded into memory (e.g. saved before unlock finished)
+        // can't be replaced by an empty copy. Merging is idempotent.
+        Self::load_history(&mut st);
         let device = st.device_id.clone();
         let t = now();
         // Full history stays on this device; the synced copy leaves out hosts

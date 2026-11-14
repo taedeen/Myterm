@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -63,7 +64,17 @@ class AppState extends ChangeNotifier {
     await tmp.rename(_metaFile.path);
   }
 
+  Timer? _saveTimer;
+
+  /// Saves a few seconds after the last change (e.g. after each command), so
+  /// history survives the app being killed or updated.
+  void saveSoon() {
+    _saveTimer?.cancel();
+    _saveTimer = Timer(const Duration(seconds: 3), save);
+  }
+
   Future<void> save() async {
+    _saveTimer?.cancel();
     if (!unlocked) return;
     final blobs = await core.exportStore();
     final tmp = File('${_storeFile.path}.tmp');
@@ -100,18 +111,18 @@ class AppState extends ChangeNotifier {
   Future<bool> unlockWithBiometrics() async {
     final wrapped = _meta['deviceWrapped'] as String?;
     if (wrapped == null) return false;
-    final mk = await Native.deviceUnwrap(base64Decode(wrapped));
-    if (mk == null) return false;
+    final raw = await Native.deviceUnwrap(base64Decode(wrapped));
+    if (raw == null) return false;
+    // The channel hands back a read-only view; copy it so it can be wiped.
+    final mk = Uint8List.fromList(raw);
     try {
+      // Unlocking also loads history from the vault (Rust side).
       await core.unlockWithMasterKey(masterKey: mk);
     } finally {
       wipe(mk);
+      wipe(raw);
+      notifyListeners();
     }
-    // Re-import so history (sealed in the vault) loads now that it can be decrypted.
-    if (await _storeFile.exists()) {
-      await core.importStore(store: await _storeFile.readAsBytes());
-    }
-    notifyListeners();
     return true;
   }
 
@@ -124,9 +135,6 @@ class AppState extends ChangeNotifier {
       kdfT: _meta['t'] as int,
       kdfP: _meta['p'] as int,
     );
-    if (await _storeFile.exists()) {
-      await core.importStore(store: await _storeFile.readAsBytes());
-    }
     notifyListeners();
   }
 

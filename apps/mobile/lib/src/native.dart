@@ -68,4 +68,13 @@ class Native {
 }
 
 /// Overwrites a byte list in place (best effort; Dart may have copies).
-void wipe(Uint8List? bytes) => bytes?.fillRange(0, bytes.length, 0);
+/// Lists from platform channels can be read-only views; those are skipped
+/// rather than throwing.
+void wipe(Uint8List? bytes) {
+  if (bytes == null) return;
+  try {
+    bytes.fillRange(0, bytes.length, 0);
+  } on UnsupportedError {
+    // Unmodifiable view: nothing we can overwrite from Dart.
+  }
+}
