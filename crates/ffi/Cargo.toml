@@ -4,6 +4,7 @@ description = "MyTerm API exposed to the Flutter apps via flutter_rust_bridge"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 
 [lib]
 crate-type = ["cdylib", "staticlib", "rlib"]

@@ -4,6 +4,7 @@ description = "MyTerm SSH transport: russh sessions, host key checks, password/k
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 myterm-core = { path = "../core" }
