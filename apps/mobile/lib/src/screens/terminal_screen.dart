@@ -278,7 +278,7 @@ class _SessionTabs extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 3, 8, 3),
+      padding: const EdgeInsets.fromLTRB(4, 2, 4, 2),
       child: Row(children: [
         IconButton.filledTonal(
           style: _compact,
@@ -287,14 +287,14 @@ class _SessionTabs extends StatelessWidget {
           tooltip: 'Back (sessions keep running)',
           icon: const Icon(Icons.chevron_left),
         ),
-        const SizedBox(width: 6),
+        const SizedBox(width: 4),
         Expanded(
           child: SizedBox(
             height: 33, // was 44
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
               itemCount: sessions.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 6),
+              separatorBuilder: (_, __) => const SizedBox(width: 4),
               itemBuilder: (context, i) {
                 final t = sessions[i];
                 final active = identical(t, current);
@@ -310,7 +310,7 @@ class _SessionTabs extends StatelessWidget {
             ),
           ),
         ),
-        const SizedBox(width: 6),
+        const SizedBox(width: 4),
         IconButton.filledTonal(
           style: _compact,
           iconSize: 20,
@@ -353,10 +353,10 @@ class _Tab extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
         onTap: onTap,
         child: Padding(
-          padding: const EdgeInsets.only(left: 12, right: 4),
+          padding: const EdgeInsets.only(left: 8),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
             Icon(Icons.terminal, color: colour, size: 14),
-            const SizedBox(width: 6),
+            const SizedBox(width: 4),
             ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 180),
               child: Text(
