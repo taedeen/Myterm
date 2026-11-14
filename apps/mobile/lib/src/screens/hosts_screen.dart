@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
@@ -75,6 +78,9 @@ class _HostsScreenState extends State<HostsScreen> {
   }
 }
 
+/// Standard SSH port, used when a host doesn't override it.
+const defaultSshPort = 22;
+
 class HostEditScreen extends StatefulWidget {
   const HostEditScreen({super.key, required this.state, this.host});
   final AppState state;
@@ -87,7 +93,11 @@ class HostEditScreen extends StatefulWidget {
 class _HostEditScreenState extends State<HostEditScreen> {
   late final _label = TextEditingController(text: widget.host?.label);
   late final _address = TextEditingController(text: widget.host?.address);
-  late final _port = TextEditingController(text: widget.host?.port?.toString() ?? '');
+  // New hosts start on the standard SSH port; change it to override.
+  late final _port = TextEditingController(text: (widget.host?.port ?? defaultSshPort).toString());
+  final _password = TextEditingController();
+  bool _showPassword = false;
+  String? _portError;
   late final _user = TextEditingController(text: widget.host?.username);
   late final _tags = TextEditingController(text: widget.host?.tags.join(', '));
   late String? _credentialId = widget.host?.credentialId;
@@ -102,15 +112,61 @@ class _HostEditScreenState extends State<HostEditScreen> {
     Native.listHardwareKeys().then((k) => setState(() => _hwKeys = k));
   }
 
+  @override
+  void dispose() {
+    _password.clear();
+    _password.dispose();
+    super.dispose();
+  }
+
+  /// Blank means the default SSH port; anything else must be 1-65535.
+  int? _parsePort() {
+    final text = _port.text.trim();
+    if (text.isEmpty) return defaultSshPort;
+    final p = int.tryParse(text);
+    return (p != null && p >= 1 && p <= 65535) ? p : null;
+  }
+
   Future<void> _save() async {
     final address = _address.text.trim();
     if (address.isEmpty) return;
+    final port = _parsePort();
+    if (port == null) {
+      setState(() => _portError = '1–65535');
+      return;
+    }
+    final label = _label.text.trim().isEmpty ? address : _label.text.trim();
+    final id = widget.host?.id ?? AppState.newId();
+    if (_password.text.isNotEmpty) {
+      final draft = HostDto(
+        id: id,
+        label: label,
+        address: address,
+        port: port,
+        username: _user.text.trim(),
+        groupId: widget.host?.groupId,
+        credentialId: _credentialId,
+        hardwareKeyId: _hardwareKeyId,
+        tags: const [],
+        os: widget.host?.os,
+        keybarProfileId: widget.host?.keybarProfileId,
+        hardwareKeysOnly: _hardwareOnly,
+        syncHistory: _syncHistory,
+        jumpChain: widget.host?.jumpChain ?? const [],
+      );
+      _credentialId = await widget.state.saveHostPassword(
+        draft,
+        Uint8List.fromList(utf8.encode(_password.text)),
+        updateHost: false,
+      );
+      _password.clear();
+    }
     await widget.state.core.upsertHost(
       host: HostDto(
-        id: widget.host?.id ?? AppState.newId(),
-        label: _label.text.trim().isEmpty ? address : _label.text.trim(),
+        id: id,
+        label: label,
         address: address,
-        port: int.tryParse(_port.text.trim()),
+        port: port,
         username: _user.text.trim(),
         groupId: widget.host?.groupId,
         credentialId: _credentialId,
@@ -136,6 +192,7 @@ class _HostEditScreenState extends State<HostEditScreen> {
   @override
   Widget build(BuildContext context) {
     final creds = widget.state.core.listCredentials();
+    final hasSavedPassword = creds.any((c) => c.id == _credentialId && c.kind == CredentialKind.password);
     InputDecoration dec(String l) => InputDecoration(labelText: l, border: const OutlineInputBorder());
     return Scaffold(
       appBar: AppBar(
@@ -154,16 +211,38 @@ class _HostEditScreenState extends State<HostEditScreen> {
           Expanded(child: TextField(controller: _user, decoration: dec('Username'))),
           const SizedBox(width: 12),
           SizedBox(
-            width: 100,
-            child: TextField(controller: _port, decoration: dec('Port'), keyboardType: TextInputType.number),
+            width: 110,
+            child: TextField(
+              controller: _port,
+              keyboardType: TextInputType.number,
+              decoration: dec('Port').copyWith(hintText: '$defaultSshPort', errorText: _portError),
+              onChanged: (_) => setState(() => _portError = null),
+            ),
           ),
         ]),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _password,
+          obscureText: !_showPassword,
+          enableSuggestions: false,
+          autocorrect: false,
+          keyboardType: TextInputType.visiblePassword,
+          decoration: dec('Password').copyWith(
+            helperText: hasSavedPassword
+                ? 'Saved in Keychain. Type a new one to replace it.'
+                : 'Optional. Saved encrypted in the Keychain.',
+            suffixIcon: IconButton(
+              icon: Icon(_showPassword ? Icons.visibility_off : Icons.visibility),
+              onPressed: () => setState(() => _showPassword = !_showPassword),
+            ),
+          ),
+        ),
         const SizedBox(height: 12),
         TextField(controller: _tags, decoration: dec('Tags (comma separated)')),
         const SizedBox(height: 12),
         DropdownButtonFormField<String?>(
           value: _credentialId,
-          decoration: dec('Password or key from Keychain'),
+          decoration: dec('Or use a saved password / key'),
           items: [
             const DropdownMenuItem(value: null, child: Text('None')),
             for (final c in creds) DropdownMenuItem(value: c.id, child: Text(c.name)),
