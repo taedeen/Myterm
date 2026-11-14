@@ -158,6 +158,8 @@ pub enum AuthChoice {
     Stored,
     /// Use a hardware key held by native code; callbacks below are required.
     Hardware { key_id: String, public_sec1: Vec<u8>, protection: String },
+    /// A password typed at connect time for this session only (not stored).
+    Password { password: Vec<u8> },
 }
 
 // ---------------------------------------------------------------- internals
@@ -639,6 +641,18 @@ impl MyTerm {
             .collect()
     }
 
+    /// True when the host (or its group) has a saved password or key, so the
+    /// app can ask for a password before connecting when it doesn't.
+    #[frb(sync)]
+    pub fn host_has_credential(&self, host_id: String) -> bool {
+        let st = self.st();
+        let Some(h) = st.host(&host_id) else { return false };
+        model::resolve(&st.model_host(&h), &st.model_groups())
+            .ok()
+            .and_then(|r| r.identity_id)
+            .is_some_and(|id| st.cred_meta(&id).is_some())
+    }
+
     // ----- snippets and key bar
 
     pub fn upsert_snippet(&self, id: String, name: String, body: String) -> anyhow::Result<()> {
@@ -770,8 +784,12 @@ impl MyTerm {
                         key_id: key_id.clone(),
                         sign: sign.clone(),
                     })),
+                    (AuthChoice::Password { password }, true) => Auth::Password(SecretBuf::new(password.clone())),
                     _ => {
-                        let cred_id = r.identity_id.clone().ok_or_else(|| anyhow::anyhow!("no credential for {}", h.label))?;
+                        let cred_id = r
+                            .identity_id
+                            .clone()
+                            .ok_or_else(|| anyhow::anyhow!("no saved password or key for {}", h.label))?;
                         let secret = st.vault.secret(&cred_id)?;
                         if st.field(&cred_id, "kind") == "private_key" {
                             Auth::PrivateKey { openssh: secret, passphrase: None }

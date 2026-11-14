@@ -226,7 +226,10 @@ async fn authenticate(handle: &mut Handle<Verifier>, t: &Target) -> Result<(), S
     let ok = match &t.auth {
         Auth::Password(pw) => {
             let pw = String::from_utf8_lossy(pw.expose()).into_owned();
-            handle.authenticate_password(&t.user, pw).await?.success()
+            // Many servers (PAM setups, TrueNAS, macOS) only offer the password
+            // through keyboard-interactive, so fall back to it.
+            handle.authenticate_password(&t.user, pw.clone()).await?.success()
+                || keyboard_interactive_password(handle, &t.user, &pw).await?
         }
         Auth::PrivateKey { openssh, passphrase } => {
             let text = String::from_utf8_lossy(openssh.expose()).into_owned();
@@ -250,6 +253,38 @@ async fn authenticate(handle: &mut Handle<Verifier>, t: &Target) -> Result<(), S
     } else {
         Err(SshError::AuthFailed(format!("{}@{}", t.user, t.host)))
     }
+}
+
+/// Answers keyboard-interactive prompts with the password. Prompts that don't
+/// look like a password prompt (e.g. an OTP) get an empty answer, so the
+/// server fails rather than receiving the password in the wrong place.
+async fn keyboard_interactive_password(handle: &mut Handle<Verifier>, user: &str, pw: &str) -> Result<bool, SshError> {
+    use russh::client::KeyboardInteractiveAuthResponse as R;
+    let mut resp = handle.authenticate_keyboard_interactive_start(user, None::<String>).await?;
+    // Servers usually ask once, then send an empty round; allow a few.
+    for _ in 0..4 {
+        match resp {
+            R::Success => return Ok(true),
+            R::InfoRequest { prompts, .. } => {
+                let single = prompts.len() == 1;
+                let answers = prompts
+                    .iter()
+                    .map(|p| {
+                        let lower = p.prompt.to_lowercase();
+                        let is_pw = lower.contains("password") || (lower.contains("passcode") && !lower.contains("one-time"));
+                        if is_pw || (single && !p.echo && !lower.contains("code")) {
+                            pw.to_string()
+                        } else {
+                            String::new()
+                        }
+                    })
+                    .collect();
+                resp = handle.authenticate_keyboard_interactive_respond(answers).await?;
+            }
+            _ => return Ok(false),
+        }
+    }
+    Ok(false)
 }
 
 /// Opens an interactive shell. Output arrives on `events`; the returned

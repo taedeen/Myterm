@@ -48,8 +48,12 @@ class _TerminalScreenState extends State<TerminalScreen> {
     _connect();
   }
 
-  Future<AuthChoice> _auth() async {
-    final keyId = widget.host.hardwareKeyId;
+  /// The host as currently saved (updated if a password is saved on connect).
+  late HostDto _host = widget.host;
+  bool _authTried = false;
+
+  Future<AuthChoice?> _auth() async {
+    final keyId = _host.hardwareKeyId;
     if (keyId != null) {
       final keys = await Native.listHardwareKeys();
       for (final k in keys) {
@@ -58,13 +62,79 @@ class _TerminalScreenState extends State<TerminalScreen> {
         }
       }
     }
-    return const AuthChoice.stored();
+    if (core.hostHasCredential(hostId: _host.id)) return const AuthChoice.stored();
+    return await _askPassword(retry: false);
   }
 
-  Future<void> _connect() async {
-    final auth = await _auth();
+  /// Asks for the host's login password. Returns null if cancelled.
+  /// With "Save to Keychain" ticked the password is stored and linked to the
+  /// host; otherwise it is used for this connection only.
+  Future<AuthChoice?> _askPassword({required bool retry}) async {
+    if (!mounted) return null;
+    final ctrl = TextEditingController();
+    var save = true;
+    var show = false;
+    final ok = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setD) => AlertDialog(
+          title: Text(retry ? 'Password rejected' : 'Password for ${_host.username.isEmpty ? '' : '${_host.username}@'}${_host.label}'),
+          content: Column(mainAxisSize: MainAxisSize.min, children: [
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              obscureText: !show,
+              enableSuggestions: false,
+              autocorrect: false,
+              keyboardType: TextInputType.visiblePassword,
+              decoration: InputDecoration(
+                labelText: 'Password',
+                suffixIcon: IconButton(
+                  icon: Icon(show ? Icons.visibility_off : Icons.visibility),
+                  onPressed: () => setD(() => show = !show),
+                ),
+              ),
+              onSubmitted: (_) => Navigator.pop(ctx, true),
+            ),
+            CheckboxListTile(
+              contentPadding: EdgeInsets.zero,
+              value: save,
+              title: const Text('Save to Keychain'),
+              onChanged: (v) => setD(() => save = v ?? true),
+            ),
+          ]),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Connect')),
+          ],
+        ),
+      ),
+    );
+    final bytes = Uint8List.fromList(utf8.encode(ctrl.text));
+    ctrl.clear();
+    ctrl.dispose();
+    if (ok != true || bytes.isEmpty) {
+      wipe(bytes);
+      return null;
+    }
+    if (save) {
+      final id = await widget.state.saveHostPassword(_host, bytes);
+      _host = AppState.withCredential(_host, id);
+      return const AuthChoice.stored();
+    }
+    return AuthChoice.password(password: bytes);
+  }
+
+  Future<void> _connect({AuthChoice? auth}) async {
+    auth ??= await _auth();
+    if (auth == null) {
+      _setStatus('Cancelled');
+      return;
+    }
+    _authTried = true;
     final stream = core.connect(
-      hostId: widget.host.id,
+      hostId: _host.id,
       cols: terminal.viewWidth,
       rows: terminal.viewHeight,
       auth: auth,
@@ -88,7 +158,20 @@ class _TerminalScreenState extends State<TerminalScreen> {
         _closed();
       case SessionEventDto_Error(:final field0):
         _setStatus(field0);
+        if (field0.contains('authentication failed') && _host.hardwareKeyId == null && _authTried) {
+          _authTried = false;
+          _retryWithPassword();
+        }
     }
+  }
+
+  /// Wrong or missing password: ask once more, then reconnect.
+  Future<void> _retryWithPassword() async {
+    await _sub?.cancel();
+    final auth = await _askPassword(retry: true);
+    if (auth == null) return;
+    _setStatus('Connecting…');
+    await _connect(auth: auth);
   }
 
   void _closed() {

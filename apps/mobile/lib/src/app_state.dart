@@ -151,4 +151,53 @@ class AppState extends ChangeNotifier {
   int activeSessionsFor(String hostId) => sessions.where((s) => s.host.id == hostId).length;
 
   static String newId() => const Uuid().v4();
+
+  /// Copy of [h] with a different saved credential.
+  static HostDto withCredential(HostDto h, String? credentialId) => HostDto(
+        id: h.id,
+        label: h.label,
+        address: h.address,
+        port: h.port,
+        username: h.username,
+        groupId: h.groupId,
+        credentialId: credentialId,
+        hardwareKeyId: h.hardwareKeyId,
+        tags: h.tags,
+        os: h.os,
+        keybarProfileId: h.keybarProfileId,
+        hardwareKeysOnly: h.hardwareKeysOnly,
+        syncHistory: h.syncHistory,
+        jumpChain: h.jumpChain,
+      );
+
+  /// Saves [password] to the Keychain as [host]'s login password and links it
+  /// to the host. Updates the host's existing password entry if it has one.
+  /// Wipes [password] afterwards. Does not write the host itself unless
+  /// [updateHost] is true.
+  Future<String> saveHostPassword(HostDto host, Uint8List password, {bool updateHost = true}) async {
+    final existing = core
+        .listCredentials()
+        .where((c) => c.id == host.credentialId && c.kind == CredentialKind.password)
+        .firstOrNull;
+    final id = existing?.id ?? newId();
+    try {
+      await core.putCredential(
+        cred: CredentialDto(
+          id: id,
+          name: existing?.name ?? '${host.label.isEmpty ? host.address : host.label} password',
+          kind: CredentialKind.password,
+          confirm: existing?.confirm ?? ConfirmDto.oncePerSession,
+          neverAutoType: existing?.neverAutoType ?? false,
+          appendEnter: true,
+          deviceOnly: existing?.deviceOnly ?? false,
+        ),
+        secret: password,
+      );
+    } finally {
+      wipe(password);
+    }
+    if (updateHost) await core.upsertHost(host: withCredential(host, id));
+    await save();
+    return id;
+  }
 }
