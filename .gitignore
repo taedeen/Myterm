@@ -1,0 +1,16 @@
+/target
+**/*.rs.bk
+Cargo.lock.bak
+# Flutter / Android
+apps/mobile/.dart_tool/
+apps/mobile/build/
+apps/mobile/.flutter-plugins*
+apps/mobile/android/.gradle/
+apps/mobile/android/local.properties
+apps/mobile/android/app/src/main/jniLibs/
+apps/mobile/lib/src/rust/
+crates/ffi/src/frb_generated.rs
+.idea/
+.vscode/
+*.iml
+.DS_Store
