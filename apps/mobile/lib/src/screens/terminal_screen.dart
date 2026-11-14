@@ -152,6 +152,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
     switch (ev) {
       case SessionEventDto_Started(:final field0):
         _sessionId = field0;
+        // The PTY was opened before layout; send the real size now.
+        core.resize(sessionId: field0, cols: terminal.viewWidth, rows: terminal.viewHeight);
         widget.state.addSession(LiveSession(id: field0, host: widget.host));
         _setStatus(null);
       case SessionEventDto_Output(:final field0):
