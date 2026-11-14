@@ -848,9 +848,18 @@ impl MyTerm {
             while let Some(ev) = rx.recv().await {
                 match ev {
                     Event::Output(bytes) => {
-                        if let Some(l) = state.lock().unwrap_or_else(|e| e.into_inner()).sessions.get_mut(&id) {
+                        let mut guard = state.lock().unwrap_or_else(|e| e.into_inner());
+                        let st = &mut *guard;
+                        if let Some(l) = st.sessions.get_mut(&id) {
                             l.session.on_output(&bytes);
+                            // Combined `cd`s seen via the prompt (cdtrack).
+                            let ctx = RecordContext { incognito: l.session.incognito, prompt: None };
+                            let host = l.session.host_id.clone();
+                            for cmd in l.session.take_derived() {
+                                let _ = st.history.record(&host, &cmd, now(), ctx);
+                            }
                         }
+                        drop(guard);
                         let _ = events.add(SessionEventDto::Output(bytes));
                     }
                     Event::Exit(code) => {
@@ -881,6 +890,12 @@ impl MyTerm {
                 let ctx = RecordContext { incognito: live.session.incognito, prompt: Some(cmd.prompt) };
                 let _ = st.history.record(&host, &cmd.line, now(), ctx);
             }
+        }
+        // Combined `cd`s from typed commands (cdtrack fallback mode).
+        let ctx = RecordContext { incognito: live.session.incognito, prompt: None };
+        let host = live.session.host_id.clone();
+        for cmd in live.session.take_derived() {
+            let _ = st.history.record(&host, &cmd, now(), ctx);
         }
         Ok(())
     }

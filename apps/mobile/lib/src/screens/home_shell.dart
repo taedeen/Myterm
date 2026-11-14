@@ -24,7 +24,9 @@ class _HomeShellState extends State<HomeShell> {
       ConnectionsScreen(state: widget.state),
       SettingsScreen(state: widget.state),
     ];
-    return Scaffold(
+    return ListenableBuilder(
+      listenable: widget.state,
+      builder: (context, _) => Scaffold(
       body: SafeArea(child: IndexedStack(index: _tab, children: pages)),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _tab,
@@ -33,8 +35,8 @@ class _HomeShellState extends State<HomeShell> {
           const NavigationDestination(icon: Icon(Icons.inventory_2_outlined), label: 'Vaults'),
           NavigationDestination(
             icon: Badge(
-              isLabelVisible: widget.state.sessions.isNotEmpty,
-              label: Text('${widget.state.sessions.length}'),
+              isLabelVisible: widget.state.liveCount > 0,
+              label: Text('${widget.state.liveCount}'),
               child: const Icon(Icons.terminal),
             ),
             label: 'Connections',
@@ -42,6 +44,7 @@ class _HomeShellState extends State<HomeShell> {
           const NavigationDestination(icon: Icon(Icons.settings), label: 'Settings'),
         ],
       ),
+    ),
     );
   }
 }

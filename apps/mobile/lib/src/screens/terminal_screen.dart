@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -8,241 +7,75 @@ import 'package:xterm/xterm.dart';
 import '../app_state.dart';
 import '../native.dart';
 import '../rust/api.dart';
+import '../terminal_session.dart';
 import '../widgets/key_bar.dart';
 import '../widgets/suggestion_bar.dart';
 
-/// Connects to [host] and opens its terminal.
+/// Opens [host]. If it already has a live session, asks whether to resume
+/// it or start a new one.
 Future<void> openTerminal(BuildContext context, AppState state, HostDto host) async {
-  await Navigator.of(context).push(MaterialPageRoute(builder: (_) => TerminalScreen(state: state, host: host)));
+  final open = state.sessions.where((s) => s.host.id == host.id && !s.ended).toList();
+  TerminalSession? session;
+  if (open.isEmpty) {
+    session = state.openSession(host);
+  } else {
+    session = await showModalBottomSheet<TerminalSession>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          for (final (i, s) in open.indexed)
+            ListTile(
+              leading: const Icon(Icons.terminal, color: Color(0xFF2ECC71)),
+              title: Text('Resume session ${i + 1}'),
+              subtitle: Text(s.status.isEmpty ? 'Active' : s.status),
+              onTap: () => Navigator.pop(ctx, s),
+            ),
+          ListTile(
+            leading: const Icon(Icons.add),
+            title: const Text('New session'),
+            onTap: () => Navigator.pop(ctx, state.openSession(host)),
+          ),
+        ]),
+      ),
+    );
+  }
+  if (session != null && context.mounted) await showSession(context, state, session);
 }
 
+/// Shows an existing session's terminal.
+Future<void> showSession(BuildContext context, AppState state, TerminalSession session) =>
+    Navigator.of(context).push(MaterialPageRoute(builder: (_) => TerminalScreen(state: state, session: session)));
+
+/// Displays a [TerminalSession]. Leaving this screen keeps the session
+/// running; the X in the session bar ends it.
 class TerminalScreen extends StatefulWidget {
-  const TerminalScreen({super.key, required this.state, required this.host});
+  const TerminalScreen({super.key, required this.state, required this.session});
   final AppState state;
-  final HostDto host;
+  final TerminalSession session;
 
   @override
   State<TerminalScreen> createState() => _TerminalScreenState();
 }
 
 class _TerminalScreenState extends State<TerminalScreen> {
-  final terminal = Terminal(maxLines: 10000);
   final terminalController = TerminalController();
-  StreamSubscription<SessionEventDto>? _sub;
-  int? _sessionId;
-  String _status = 'Connecting…';
-  List<SuggestionDto> _suggestions = const [];
-  // Server output -> UTF-8 text -> terminal, chunk by chunk. (A
-  // StringConversionSink.withCallback would buffer everything until close.)
-  // The streaming decoder also handles characters split across chunks.
-  final _output = StreamController<List<int>>();
-  late final StreamSubscription<String> _text;
 
+  TerminalSession get s => widget.session;
   MyTerm get core => widget.state.core;
 
   @override
-  void initState() {
-    super.initState();
-    _text = const Utf8Decoder(allowMalformed: true).bind(_output.stream).listen(terminal.write);
-    terminal.onOutput = _onTyped;
-    terminal.onResize = (w, h, pw, ph) {
-      final id = _sessionId;
-      if (id != null) core.resize(sessionId: id, cols: w, rows: h);
-    };
-    _connect();
+  void dispose() {
+    terminalController.dispose();
+    super.dispose();
   }
 
-  /// The host as currently saved (updated if a password is saved on connect).
-  late HostDto _host = widget.host;
-  bool _authTried = false;
-
-  Future<AuthChoice?> _auth() async {
-    final keyId = _host.hardwareKeyId;
-    if (keyId != null) {
-      final keys = await Native.listHardwareKeys();
-      for (final k in keys) {
-        if (k.alias == keyId) {
-          return AuthChoice.hardware(keyId: k.alias, publicSec1: k.publicSec1, protection: k.protection);
-        }
-      }
-    }
-    if (core.hostHasCredential(hostId: _host.id)) return const AuthChoice.stored();
-    return await _askPassword(retry: false);
-  }
-
-  /// Asks for the host's login password. Returns null if cancelled.
-  /// With "Save to Keychain" ticked the password is stored and linked to the
-  /// host; otherwise it is used for this connection only.
-  Future<AuthChoice?> _askPassword({required bool retry}) async {
-    if (!mounted) return null;
-    final ctrl = TextEditingController();
-    var save = true;
-    var show = false;
-    final ok = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setD) => AlertDialog(
-          title: Text(retry ? 'Password rejected' : 'Password for ${_host.username.isEmpty ? '' : '${_host.username}@'}${_host.label}'),
-          content: Column(mainAxisSize: MainAxisSize.min, children: [
-            TextField(
-              controller: ctrl,
-              autofocus: true,
-              obscureText: !show,
-              enableSuggestions: false,
-              autocorrect: false,
-              keyboardType: TextInputType.visiblePassword,
-              decoration: InputDecoration(
-                labelText: 'Password',
-                suffixIcon: IconButton(
-                  icon: Icon(show ? Icons.visibility_off : Icons.visibility),
-                  onPressed: () => setD(() => show = !show),
-                ),
-              ),
-              onSubmitted: (_) => Navigator.pop(ctx, true),
-            ),
-            CheckboxListTile(
-              contentPadding: EdgeInsets.zero,
-              value: save,
-              title: const Text('Save to Keychain'),
-              onChanged: (v) => setD(() => save = v ?? true),
-            ),
-          ]),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Connect')),
-          ],
-        ),
-      ),
-    );
-    final bytes = Uint8List.fromList(utf8.encode(ctrl.text));
-    ctrl.clear();
-    ctrl.dispose();
-    if (ok != true || bytes.isEmpty) {
-      wipe(bytes);
-      return null;
-    }
-    if (save) {
-      final id = await widget.state.saveHostPassword(_host, bytes);
-      _host = AppState.withCredential(_host, id);
-      return const AuthChoice.stored();
-    }
-    return AuthChoice.password(password: bytes);
-  }
-
-  Future<void> _connect({AuthChoice? auth}) async {
-    auth ??= await _auth();
-    if (auth == null) {
-      _setStatus('Cancelled');
-      return;
-    }
-    _authTried = true;
-    final stream = core.connect(
-      hostId: _host.id,
-      cols: terminal.viewWidth,
-      rows: terminal.viewHeight,
-      auth: auth,
-      confirmHostKey: _confirmHostKey,
-      hardwareSign: (alias, data) => Native.signWithHardwareKey(alias, data),
-    );
-    _sub = stream.listen(_onEvent, onError: (Object e) => _setStatus('Error: $e'));
-  }
-
-  void _onEvent(SessionEventDto ev) {
-    switch (ev) {
-      case SessionEventDto_Started(:final field0):
-        _sessionId = field0;
-        // The PTY was opened before layout; send the real size now.
-        core.resize(sessionId: field0, cols: terminal.viewWidth, rows: terminal.viewHeight);
-        widget.state.addSession(LiveSession(id: field0, host: widget.host));
-        _setStatus(null);
-      case SessionEventDto_Output(:final field0):
-        _output.add(field0);
-      case SessionEventDto_Exit(:final field0):
-        terminal.write('\r\n[process exited${field0 == null ? '' : ' with $field0'}]\r\n');
-      case SessionEventDto_Closed():
-        _closed();
-      case SessionEventDto_Error(:final field0):
-        _setStatus(field0);
-        if (field0.contains('authentication failed') && _host.hardwareKeyId == null && _authTried) {
-          _authTried = false;
-          _retryWithPassword();
-        }
-    }
-  }
-
-  /// Wrong or missing password: ask once more, then reconnect.
-  Future<void> _retryWithPassword() async {
-    await _sub?.cancel();
-    final auth = await _askPassword(retry: true);
-    if (auth == null) return;
-    _setStatus('Connecting…');
-    await _connect(auth: auth);
-  }
-
-  void _closed() {
-    final id = _sessionId;
-    if (id != null) widget.state.removeSession(id);
-    _sessionId = null;
-    _setStatus('Disconnected');
-  }
-
-  void _setStatus(String? s) {
-    if (mounted) setState(() => _status = s ?? '');
-  }
-
-  Future<bool> _confirmHostKey(String host, int port, String kind, String fingerprint) async {
-    if (!mounted) return false;
-    final ok = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        title: Text(kind == 'new_key_type' ? 'New host key type' : 'Unknown host'),
-        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('$host:$port'),
-          const SizedBox(height: 12),
-          const Text('Check this fingerprint against the server before trusting it:'),
-          const SizedBox(height: 8),
-          SelectableText(fingerprint, style: const TextStyle(fontFamily: 'monospace')),
-        ]),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Trust')),
-        ],
-      ),
-    );
-    return ok ?? false;
-  }
-
-  void _onTyped(String data) => _send(Uint8List.fromList(utf8.encode(data)));
-
-  void _send(Uint8List bytes) {
-    final id = _sessionId;
-    if (id == null) return;
-    try {
-      core.sendInput(sessionId: id, data: bytes);
-    } catch (_) {
-      return;
-    }
-    _refreshSuggestions();
-  }
-
-  void _refreshSuggestions() {
-    final id = _sessionId;
-    if (id == null) return;
-    setState(() => _suggestions = core.suggest(sessionId: id, limit: 6));
-  }
-
-  void _accept(SuggestionDto s) {
-    final id = _sessionId;
-    if (id == null) return;
-    core.acceptSuggestion(sessionId: id, line: s.line);
-    _refreshSuggestions();
+  void _toast(String msg) {
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
   /// Spec 3.5 C: secure "Type password".
   Future<void> typePassword(String? credentialId) async {
-    final id = _sessionId;
+    final id = s.sessionId;
     if (id == null) return;
     var override = false;
     try {
@@ -253,7 +86,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
         r = core.typePassword(sessionId: id, credentialId: credentialId, overridePrompt: true, confirmed: false);
       }
       if (r == InjectDto.needConfirmation) {
-        if (!await Native.confirmUser('Type password into ${widget.host.label}')) return;
+        if (!await Native.confirmUser('Type password into ${s.host.label}')) return;
         r = core.typePassword(sessionId: id, credentialId: credentialId, overridePrompt: override, confirmed: true);
       }
       final msg = switch (r) {
@@ -261,9 +94,9 @@ class _TerminalScreenState extends State<TerminalScreen> {
         InjectDto.refusedOneTimeCode => 'This prompt wants a one-time code, not a password.',
         _ => null,
       };
-      if (msg != null && mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      if (msg != null) _toast(msg);
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+      _toast('$e');
     }
   }
 
@@ -282,7 +115,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
       false;
 
   Future<void> runSnippet(String snippetId) async {
-    final snippet = core.listSnippets().where((s) => s.id == snippetId).firstOrNull;
+    final snippet = core.listSnippets().where((x) => x.id == snippetId).firstOrNull;
     if (snippet == null) return;
     final values = <String, String>{};
     for (final p in snippet.params) {
@@ -291,7 +124,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
       values[p] = v;
     }
     final line = core.renderSnippet(snippetId: snippetId, values: values);
-    if (line != null) _send(Uint8List.fromList(utf8.encode(line)));
+    if (line != null) s.send(Uint8List.fromList(utf8.encode(line)));
   }
 
   Future<String?> _promptText(String label) {
@@ -309,90 +142,89 @@ class _TerminalScreenState extends State<TerminalScreen> {
     );
   }
 
-  @override
-  void dispose() {
-    _sub?.cancel();
-    final id = _sessionId;
-    if (id != null) {
-      core.disconnect(sessionId: id);
-      final state = widget.state;
-      // Not during dispose: listeners would rebuild a locked tree.
-      Future.microtask(() => state.removeSession(id));
-    }
-    _text.cancel();
-    _output.close();
-    super.dispose();
+  void _close() {
+    widget.state.closeSession(s);
+    Navigator.pop(context);
   }
 
   @override
   Widget build(BuildContext context) {
     final keybars = core.builtinKeybars();
     final profile = keybars.firstWhere(
-      (k) => k.id == (widget.host.keybarProfileId ?? widget.state.keybarProfileId),
+      (k) => k.id == (s.host.keybarProfileId ?? widget.state.keybarProfileId),
       orElse: () => keybars.first,
     );
     return Scaffold(
       backgroundColor: const Color(0xFF151827),
       body: SafeArea(
-        child: Column(children: [
-          if (_status.isNotEmpty)
-            MaterialBanner(
-              content: Text(_status),
-              actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close'))],
+        child: ListenableBuilder(
+          listenable: s,
+          builder: (context, _) => Column(children: [
+            if (s.status.isNotEmpty)
+              MaterialBanner(
+                content: Text(s.status),
+                actions: [
+                  if (s.ended) TextButton(onPressed: () => s.connect(), child: const Text('Reconnect')),
+                  TextButton(onPressed: _close, child: const Text('Close')),
+                ],
+              ),
+            Expanded(
+              child: TerminalView(
+                s.terminal,
+                controller: terminalController,
+                autofocus: true,
+                backgroundOpacity: 0,
+                theme: TerminalThemes.defaultTheme,
+              ),
             ),
-          Expanded(
-            child: TerminalView(
-              terminal,
-              controller: terminalController,
-              autofocus: true,
-              backgroundOpacity: 0,
-              theme: TerminalThemes.defaultTheme,
+            SuggestionBar(suggestions: s.suggestions, onAccept: s.accept),
+            _SessionBar(
+              title: '${s.host.username.isEmpty ? '' : '${s.host.username}@'}${s.host.label}',
+              live: s.isLive,
+              onBack: () => Navigator.pop(context),
+              onClose: _close,
             ),
-          ),
-          SuggestionBar(suggestions: _suggestions, onAccept: _accept),
-          _SessionBar(
-            title: '${widget.host.username.isEmpty ? '' : '${widget.host.username}@'}${widget.host.label}',
-            onBack: () => Navigator.pop(context),
-            onClose: () {
-              final id = _sessionId;
-              if (id != null) core.disconnect(sessionId: id);
-            },
-          ),
-          KeyBar(
-            profile: profile,
-            onBytes: _send,
-            onSnippet: runSnippet,
-            onTypePassword: typePassword,
-          ),
-        ]),
+            KeyBar(
+              profile: profile,
+              onBytes: s.send,
+              onSnippet: runSnippet,
+              onTypePassword: typePassword,
+            ),
+          ]),
+        ),
       ),
     );
   }
 }
 
 class _SessionBar extends StatelessWidget {
-  const _SessionBar({required this.title, required this.onBack, required this.onClose});
+  const _SessionBar({required this.title, required this.live, required this.onBack, required this.onClose});
   final String title;
+  final bool live;
   final VoidCallback onBack;
   final VoidCallback onClose;
 
   @override
   Widget build(BuildContext context) {
-    const green = Color(0xFF2ECC71);
+    final colour = live ? const Color(0xFF2ECC71) : Colors.grey;
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
       child: Row(children: [
-        IconButton.filledTonal(onPressed: onBack, icon: const Icon(Icons.chevron_left)),
+        IconButton.filledTonal(
+          onPressed: onBack,
+          tooltip: 'Back (session keeps running)',
+          icon: const Icon(Icons.chevron_left),
+        ),
         const SizedBox(width: 8),
         Expanded(
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
             decoration: BoxDecoration(color: const Color(0xFF173A2F), borderRadius: BorderRadius.circular(16)),
             child: Row(children: [
-              const Icon(Icons.terminal, color: green, size: 18),
+              Icon(Icons.terminal, color: colour, size: 18),
               const SizedBox(width: 8),
-              Expanded(child: Text(title, overflow: TextOverflow.ellipsis, style: const TextStyle(color: green))),
-              InkWell(onTap: onClose, child: const Icon(Icons.close, color: green)),
+              Expanded(child: Text(title, overflow: TextOverflow.ellipsis, style: TextStyle(color: colour))),
+              InkWell(onTap: onClose, child: Icon(Icons.close, color: colour)),
             ]),
           ),
         ),
