@@ -60,7 +60,33 @@ class TerminalScreen extends StatefulWidget {
 class _TerminalScreenState extends State<TerminalScreen> {
   final terminalController = TerminalController();
 
-  TerminalSession get s => widget.session;
+  /// The session on screen; the tab row switches it.
+  late TerminalSession s = widget.session;
+  final _activeTab = GlobalKey();
+
+  void _switchTo(TerminalSession next) {
+    if (identical(next, s)) return;
+    setState(() => s = next);
+    _revealActiveTab();
+  }
+
+  void _revealActiveTab() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctx = _activeTab.currentContext;
+      if (ctx != null) {
+        Scrollable.ensureVisible(ctx, alignment: 0.5, duration: const Duration(milliseconds: 200));
+      }
+    });
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _revealActiveTab();
+  }
+
+  /// Opens another session to the current host and switches to it.
+  void _newSession() => _switchTo(widget.state.openSession(s.host));
   MyTerm get core => widget.state.core;
 
   @override
@@ -142,9 +168,22 @@ class _TerminalScreenState extends State<TerminalScreen> {
     );
   }
 
-  void _close() {
-    widget.state.closeSession(s);
-    Navigator.pop(context);
+  /// Closes [target] (the current session by default). Moves to a
+  /// neighbouring tab, or leaves the screen when it was the last one.
+  void _close([TerminalSession? target]) {
+    final closing = target ?? s;
+    final list = widget.state.sessions;
+    final i = list.indexOf(closing);
+    widget.state.closeSession(closing);
+    if (!identical(closing, s)) {
+      setState(() {});
+      return;
+    }
+    if (list.isEmpty) {
+      Navigator.pop(context);
+    } else {
+      _switchTo(list[i.clamp(0, list.length - 1)]);
+    }
   }
 
   @override
@@ -158,7 +197,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
       backgroundColor: const Color(0xFF151827),
       body: SafeArea(
         child: ListenableBuilder(
-          listenable: s,
+          listenable: Listenable.merge([s, widget.state]),
           builder: (context, _) => Column(children: [
             if (s.status.isNotEmpty)
               MaterialBanner(
@@ -171,6 +210,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
             Expanded(
               child: TerminalView(
                 s.terminal,
+                key: ObjectKey(s),
                 controller: terminalController,
                 autofocus: true,
                 backgroundOpacity: 0,
@@ -178,11 +218,14 @@ class _TerminalScreenState extends State<TerminalScreen> {
               ),
             ),
             SuggestionBar(suggestions: s.suggestions, onAccept: s.accept),
-            _SessionBar(
-              title: '${s.host.username.isEmpty ? '' : '${s.host.username}@'}${s.host.label}',
-              live: s.isLive,
+            _SessionTabs(
+              sessions: widget.state.sessions,
+              current: s,
+              activeKey: _activeTab,
               onBack: () => Navigator.pop(context),
+              onSelect: _switchTo,
               onClose: _close,
+              onNew: _newSession,
             ),
             KeyBar(
               profile: profile,
@@ -197,38 +240,125 @@ class _TerminalScreenState extends State<TerminalScreen> {
   }
 }
 
-class _SessionBar extends StatelessWidget {
-  const _SessionBar({required this.title, required this.live, required this.onBack, required this.onClose});
-  final String title;
-  final bool live;
+/// Back button, a scrollable row of open sessions (tap to switch, x to
+/// close), and + for another session to the current host.
+class _SessionTabs extends StatelessWidget {
+  const _SessionTabs({
+    required this.sessions,
+    required this.current,
+    required this.activeKey,
+    required this.onBack,
+    required this.onSelect,
+    required this.onClose,
+    required this.onNew,
+  });
+
+  final List<TerminalSession> sessions;
+  final TerminalSession current;
+  final Key activeKey;
   final VoidCallback onBack;
-  final VoidCallback onClose;
+  final void Function(TerminalSession) onSelect;
+  final void Function(TerminalSession) onClose;
+  final VoidCallback onNew;
+
+  /// "user@host", with a number when the same host is open more than once.
+  String _title(TerminalSession t) {
+    final base = '${t.host.username.isEmpty ? '' : '${t.host.username}@'}${t.host.label}';
+    final same = sessions.where((x) => x.host.id == t.host.id).toList();
+    return same.length > 1 ? '$base (${same.indexOf(t) + 1})' : base;
+  }
 
   @override
   Widget build(BuildContext context) {
-    final colour = live ? const Color(0xFF2ECC71) : Colors.grey;
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
       child: Row(children: [
         IconButton.filledTonal(
           onPressed: onBack,
-          tooltip: 'Back (session keeps running)',
+          tooltip: 'Back (sessions keep running)',
           icon: const Icon(Icons.chevron_left),
         ),
-        const SizedBox(width: 8),
+        const SizedBox(width: 6),
         Expanded(
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            decoration: BoxDecoration(color: const Color(0xFF173A2F), borderRadius: BorderRadius.circular(16)),
-            child: Row(children: [
-              Icon(Icons.terminal, color: colour, size: 18),
-              const SizedBox(width: 8),
-              Expanded(child: Text(title, overflow: TextOverflow.ellipsis, style: TextStyle(color: colour))),
-              InkWell(onTap: onClose, child: Icon(Icons.close, color: colour)),
-            ]),
+          child: SizedBox(
+            height: 44,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: sessions.length,
+              separatorBuilder: (_, _) => const SizedBox(width: 6),
+              itemBuilder: (context, i) {
+                final t = sessions[i];
+                final active = identical(t, current);
+                return _Tab(
+                  key: active ? activeKey : ObjectKey(t),
+                  title: _title(t),
+                  active: active,
+                  live: t.isLive,
+                  onTap: () => onSelect(t),
+                  onClose: () => onClose(t),
+                );
+              },
+            ),
           ),
         ),
+        const SizedBox(width: 6),
+        IconButton.filledTonal(onPressed: onNew, tooltip: 'New session to this host', icon: const Icon(Icons.add)),
       ]),
+    );
+  }
+}
+
+class _Tab extends StatelessWidget {
+  const _Tab({
+    super.key,
+    required this.title,
+    required this.active,
+    required this.live,
+    required this.onTap,
+    required this.onClose,
+  });
+
+  final String title;
+  final bool active;
+  final bool live;
+  final VoidCallback onTap;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    const green = Color(0xFF2ECC71);
+    final colour = live ? green : Colors.grey;
+    return Material(
+      color: active ? const Color(0xFF173A2F) : const Color(0xFF22263A),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: active ? const BorderSide(color: green, width: 1) : BorderSide.none,
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.only(left: 12, right: 4),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(Icons.terminal, color: colour, size: 16),
+            const SizedBox(width: 6),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 180),
+              child: Text(
+                title,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: active ? green : colour.withValues(alpha: 0.8)),
+              ),
+            ),
+            IconButton(
+              visualDensity: VisualDensity.compact,
+              tooltip: 'Close session',
+              icon: Icon(Icons.close, size: 18, color: colour),
+              onPressed: onClose,
+            ),
+          ]),
+        ),
+      ),
     );
   }
 }
