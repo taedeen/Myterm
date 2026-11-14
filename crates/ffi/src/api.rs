@@ -126,6 +126,7 @@ pub enum InjectDto {
     RefusedOneTimeCode,
 }
 
+#[derive(Clone, Debug)]
 pub enum SessionEventDto {
     /// First event: the id to use for input, resize and Type password.
     Started(u32),
