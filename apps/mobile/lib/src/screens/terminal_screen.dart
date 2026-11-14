@@ -261,6 +261,13 @@ class _SessionTabs extends StatelessWidget {
   final void Function(TerminalSession) onClose;
   final VoidCallback onNew;
 
+  static final _compact = IconButton.styleFrom(
+    minimumSize: const Size(33, 33),
+    fixedSize: const Size(33, 33),
+    padding: EdgeInsets.zero,
+    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+  );
+
   /// "user@host", with a number when the same host is open more than once.
   String _title(TerminalSession t) {
     final base = '${t.host.username.isEmpty ? '' : '${t.host.username}@'}${t.host.label}';
@@ -271,9 +278,11 @@ class _SessionTabs extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
+      padding: const EdgeInsets.fromLTRB(8, 3, 8, 3),
       child: Row(children: [
         IconButton.filledTonal(
+          style: _compact,
+          iconSize: 20,
           onPressed: onBack,
           tooltip: 'Back (sessions keep running)',
           icon: const Icon(Icons.chevron_left),
@@ -281,7 +290,7 @@ class _SessionTabs extends StatelessWidget {
         const SizedBox(width: 6),
         Expanded(
           child: SizedBox(
-            height: 44,
+            height: 33, // was 44
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
               itemCount: sessions.length,
@@ -302,7 +311,13 @@ class _SessionTabs extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 6),
-        IconButton.filledTonal(onPressed: onNew, tooltip: 'New session to this host', icon: const Icon(Icons.add)),
+        IconButton.filledTonal(
+          style: _compact,
+          iconSize: 20,
+          onPressed: onNew,
+          tooltip: 'New session to this host',
+          icon: const Icon(Icons.add),
+        ),
       ]),
     );
   }
@@ -340,7 +355,7 @@ class _Tab extends StatelessWidget {
         child: Padding(
           padding: const EdgeInsets.only(left: 12, right: 4),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Icon(Icons.terminal, color: colour, size: 16),
+            Icon(Icons.terminal, color: colour, size: 14),
             const SizedBox(width: 6),
             ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 180),
@@ -351,9 +366,10 @@ class _Tab extends StatelessWidget {
               ),
             ),
             IconButton(
-              visualDensity: VisualDensity.compact,
+              constraints: const BoxConstraints.tightFor(width: 28, height: 28),
+              padding: EdgeInsets.zero,
               tooltip: 'Close session',
-              icon: Icon(Icons.close, size: 18, color: colour),
+              icon: Icon(Icons.close, size: 16, color: colour),
               onPressed: onClose,
             ),
           ]),
