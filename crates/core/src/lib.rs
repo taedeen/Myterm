@@ -17,10 +17,13 @@
 //! - [`signer`]     hardware signer interface + host key policy    (3.4.1)
 //! - [`knownhosts`] trust-on-first-use host key checks             (3.4)
 //! - [`sync`]       versioned record merge for settings sync       (8.3)
+//! - [`session`]    output/input tracking + Type password on a channel
 //! - [`audit`]      hash-chained audit log                         (6.3)
+//! - [`codec`]      binary encoding for storage and sync payloads
 //! - [`sha256`]     minimal SHA-256 used for fingerprints and audit
 
 pub mod audit;
+pub mod codec;
 pub mod completion;
 pub mod history;
 pub mod inject;
@@ -29,6 +32,7 @@ pub mod knownhosts;
 pub mod model;
 pub mod prompt;
 pub mod scrub;
+pub mod session;
 pub mod sha256;
 pub mod signer;
 pub mod sshkey;

@@ -148,6 +148,14 @@ impl HistoryStore {
             .map(|(c, e)| (c.as_str(), e))
     }
 
+    pub(crate) fn raw_hosts(&self) -> &HashMap<Id, HashMap<String, Entry>> {
+        &self.hosts
+    }
+
+    pub(crate) fn insert_raw(&mut self, host_id: &str, command: String, entry: Entry) {
+        self.hosts.entry(host_id.to_string()).or_default().insert(command, entry);
+    }
+
     /// Frecency: run count weighted by a 7-day half-life.
     pub fn score(entry: &Entry, now: u64) -> f64 {
         let age_days = now.saturating_sub(entry.last_used) as f64 / 86_400.0;

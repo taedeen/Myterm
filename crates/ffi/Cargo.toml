@@ -1,0 +1,18 @@
+[package]
+name = "myterm-ffi"
+description = "MyTerm API exposed to the Flutter apps via flutter_rust_bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+myterm-core = { path = "../core" }
+myterm-vault = { path = "../vault" }
+myterm-ssh = { path = "../ssh" }
+flutter_rust_bridge = "=2.11.1"
+tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
+anyhow = "1"
+async-trait = "0.1"
