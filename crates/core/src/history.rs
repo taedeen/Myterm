@@ -138,6 +138,11 @@ impl HistoryStore {
         }
     }
 
+    /// Every host that has history, including hosts on other devices.
+    pub fn host_ids(&self) -> impl Iterator<Item = &str> {
+        self.hosts.keys().map(String::as_str)
+    }
+
     /// Live entries for a host.
     pub fn entries(&self, host_id: &str) -> impl Iterator<Item = (&str, &Entry)> {
         self.hosts

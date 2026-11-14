@@ -929,7 +929,14 @@ impl MyTerm {
         let line = live.session.current_line();
         let host_id = live.session.host_id.clone();
         let hosts: Vec<Host> = st.ids_of(K_HOST).iter().filter_map(|id| st.host(id)).map(|h| st.model_host(&h)).collect();
-        let related = hosts.iter().find(|h| h.id == host_id).map(|h| model::related_hosts(h, &hosts)).unwrap_or_default();
+        // History is shared across hosts: hosts in the same group or with the
+        // same OS come first, then every other host's history.
+        let mut related = hosts.iter().find(|h| h.id == host_id).map(|h| model::related_hosts(h, &hosts)).unwrap_or_default();
+        for other in st.history.host_ids() {
+            if other != host_id && !related.iter().any(|r| r == other) {
+                related.push(other.to_string());
+            }
+        }
         let input = CompletionInput { host_id: &host_id, related_hosts: &related, line: &line, now: now(), limit: limit as usize };
         completion::suggest(&input, &st.snippets(), &st.history, completion::BUILTIN_SPECS, None)
             .into_iter()

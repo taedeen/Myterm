@@ -47,7 +47,7 @@ class _KeyBarState extends State<KeyBar> {
   Widget build(BuildContext context) {
     const green = Color(0xFF2ECC71);
     return Container(
-      height: 52,
+      height: 39, // was 52
       color: const Color(0xFF1B1E2E),
       child: PageView(
         controller: _page,
@@ -62,10 +62,15 @@ class _KeyBarState extends State<KeyBar> {
                     padding: const EdgeInsets.symmetric(horizontal: 2),
                     child: TextButton(
                       onPressed: () => _press(key),
-                      style: TextButton.styleFrom(foregroundColor: green, minimumSize: const Size(44, 44)),
+                      style: TextButton.styleFrom(
+                        foregroundColor: green,
+                        minimumSize: const Size(33, 33),
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
                       child: key.action is KeyActionDto_TypePassword
-                          ? const Tooltip(message: 'Type password', child: Icon(Icons.key))
-                          : Text(key.label, style: const TextStyle(fontSize: 17)),
+                          ? const Tooltip(message: 'Type password', child: Icon(Icons.key, size: 20))
+                          : Text(key.label, style: const TextStyle(fontSize: 15)),
                     ),
                   ),
               ],
