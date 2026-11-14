@@ -41,7 +41,7 @@ apps/
 
 ## Building
 
-### Core tests (any machine with Rust 1.82+)
+### Core tests (any machine with Rust 1.88+)
 
 ```sh
 cargo test -p myterm-core

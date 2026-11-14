@@ -4,6 +4,7 @@ description = "MyTerm encrypted vault: Argon2id master password, XChaCha20-Poly1
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 myterm-core = { path = "../core" }
