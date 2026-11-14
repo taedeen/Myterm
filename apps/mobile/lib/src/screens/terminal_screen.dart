@@ -285,7 +285,7 @@ class _SessionTabs extends StatelessWidget {
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
               itemCount: sessions.length,
-              separatorBuilder: (_, _) => const SizedBox(width: 6),
+              separatorBuilder: (_, __) => const SizedBox(width: 6),
               itemBuilder: (context, i) {
                 final t = sessions[i];
                 final active = identical(t, current);
