@@ -55,23 +55,21 @@ class _KeyBarState extends State<KeyBar> {
           for (final row in widget.profile.rows)
             ListView(
               scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 2),
               children: [
                 for (final key in row)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 2),
-                    child: TextButton(
+                  TextButton(
                       onPressed: () => _press(key),
                       style: TextButton.styleFrom(
                         foregroundColor: green,
-                        minimumSize: const Size(33, 33),
-                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        minimumSize: const Size(30, 39),
+                        padding: const EdgeInsets.symmetric(horizontal: 6),
+                        visualDensity: VisualDensity.compact,
                         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
                       child: key.action is KeyActionDto_TypePassword
                           ? const Tooltip(message: 'Type password', child: Icon(Icons.key, size: 20))
                           : Text(key.label, style: const TextStyle(fontSize: 15)),
-                    ),
                   ),
               ],
             ),
