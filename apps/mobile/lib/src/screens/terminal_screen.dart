@@ -32,14 +32,18 @@ class _TerminalScreenState extends State<TerminalScreen> {
   int? _sessionId;
   String _status = 'Connecting…';
   List<SuggestionDto> _suggestions = const [];
-  late final ByteConversionSink _decoder =
-      const Utf8Decoder(allowMalformed: true).startChunkedConversion(StringConversionSink.withCallback(terminal.write));
+  // Server output -> UTF-8 text -> terminal, chunk by chunk. (A
+  // StringConversionSink.withCallback would buffer everything until close.)
+  // The streaming decoder also handles characters split across chunks.
+  final _output = StreamController<List<int>>();
+  late final StreamSubscription<String> _text;
 
   MyTerm get core => widget.state.core;
 
   @override
   void initState() {
     super.initState();
+    _text = const Utf8Decoder(allowMalformed: true).bind(_output.stream).listen(terminal.write);
     terminal.onOutput = _onTyped;
     terminal.onResize = (w, h, pw, ph) {
       final id = _sessionId;
@@ -151,7 +155,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
         widget.state.addSession(LiveSession(id: field0, host: widget.host));
         _setStatus(null);
       case SessionEventDto_Output(:final field0):
-        _decoder.add(field0);
+        _output.add(field0);
       case SessionEventDto_Exit(:final field0):
         terminal.write('\r\n[process exited${field0 == null ? '' : ' with $field0'}]\r\n');
       case SessionEventDto_Closed():
@@ -313,7 +317,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
       // Not during dispose: listeners would rebuild a locked tree.
       Future.microtask(() => state.removeSession(id));
     }
-    _decoder.close();
+    _text.cancel();
+    _output.close();
     super.dispose();
   }
 
