@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",   # std-only foundation: model, completion, history sync, scrubbing, key encoding
+    "crates/vault",  # encrypted vault (XChaCha20-Poly1305 + Argon2id)
+    "crates/ssh",    # SSH sessions (russh) + hardware signer auth
+    "crates/ffi",    # flutter_rust_bridge API consumed by the apps
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+rust-version = "1.88"

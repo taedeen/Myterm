@@ -1,0 +1,14 @@
+[package]
+name = "myterm-ssh"
+description = "MyTerm SSH transport: russh sessions, host key checks, password/key/hardware-key auth"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+myterm-core = { path = "../core" }
+russh = "0.54"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net"] }
+async-trait = "0.1"
+thiserror = "2"
