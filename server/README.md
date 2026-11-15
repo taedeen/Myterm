@@ -10,9 +10,14 @@ record keys and ciphertext, and keeps nothing that can decrypt them.
 
 ## Run it (e.g. on `server1`)
 
+The easy way is `upgrade.sh --setup myterm-sync` (see `deploy/README.md`): it
+does all of the below and keeps the server up to date. By hand:
+
 ```sh
 cd server
 echo "MYTERM_SYNC_TOKEN=$(openssl rand -hex 24)" > .env   # keep this; you'll type it into the app
+chmod 600 .env
+mkdir -p data && sudo chown 10001:10001 data              # the container runs as uid 10001
 docker compose up -d --build
 curl http://localhost:7341/v1/health                       # {"ok": true, "protocol": 1}
 ```
