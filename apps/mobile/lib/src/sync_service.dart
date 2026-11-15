@@ -36,6 +36,8 @@ class SyncService extends ChangeNotifier {
   bool _again = false;
   bool get running => _running;
   String? lastError;
+  /// What the last sync did, e.g. "Received 3 changes, sent 1".
+  String? lastResult;
 
   Map<String, dynamic> get _meta => state.meta;
   bool get configured => _meta['syncUrl'] != null;
@@ -237,12 +239,24 @@ class SyncService extends ChangeNotifier {
       // 1. Pull other devices' changes.
       var cursor = (_meta['syncCursor'] as int?) ?? 0;
       var changed = 0;
+      var received = 0;
+      var resetDetected = false;
       while (true) {
         final page = await _http(base, 'GET', '$vault?since=$cursor', vaultToken: id.vaultToken);
+        if ((page['cursor'] as int) < cursor) {
+          // The server is behind what this device has seen: its database was
+          // reset or restored. Start over, and send everything again since
+          // what it held before is gone.
+          cursor = 0;
+          _meta.remove('syncDigests');
+          resetDetected = true;
+          continue;
+        }
         final blobs = [
           for (final r in (page['records'] as List).cast<Map<String, dynamic>>())
             if (r['device_id'] != me) base64Decode(r['data'] as String),
         ];
+        received += blobs.length;
         if (blobs.isNotEmpty) changed += await state.core.syncApply(records: blobs);
         cursor = page['cursor'] as int;
         if (page['more'] != true) break;
@@ -269,17 +283,23 @@ class SyncService extends ChangeNotifier {
 
       _meta['syncLastAt'] = DateTime.now().millisecondsSinceEpoch;
       lastError = null;
+      lastResult = 'Received $received ($changed changed here), sent ${todo.length}';
+      // Log syncs that did something; quiet ones every minute would bury the rest.
+      if (changed > 0 || todo.isNotEmpty || resetDetected) {
+        state.core.auditSync(detail: '${resetDetected ? 'server was reset; resent everything. ' : ''}$lastResult');
+      }
       await state.writeMeta();
       if (changed > 0) {
         await state.save(syncAfter: false);
         state.refresh();
       }
     } on SyncError catch (e) {
-      lastError = e.status == 401
-          ? 'The server rejected this vault. It may have been deleted or reset on the server.'
-          : e.message;
+      _failed(e.status == 401
+          ? 'The server rejected this vault. It may have been deleted or reset on the server: '
+              'Disconnect, then set up sync again.'
+          : e.message);
     } catch (e) {
-      lastError = '$e';
+      _failed('$e');
     } finally {
       _running = false;
       notifyListeners();
@@ -288,6 +308,26 @@ class SyncService extends ChangeNotifier {
       _again = false;
       await syncNow();
     }
+  }
+
+  void _failed(String message) {
+    // Log each new error once, not every minute while it persists.
+    if (message != lastError && state.unlocked) {
+      try {
+        state.core.auditSync(detail: 'failed: $message');
+      } catch (_) {}
+    }
+    lastError = message;
+    lastResult = null;
+  }
+
+  /// Forgets what was sent and received, then syncs everything again.
+  Future<void> resyncAll() async {
+    _meta
+      ..['syncCursor'] = 0
+      ..remove('syncDigests');
+    await state.writeMeta();
+    await syncNow();
   }
 
   @override

@@ -45,7 +45,9 @@ class SyncCard extends StatelessWidget {
               subtitle: Text([
                 sync.url!,
                 if (sync.running) 'Syncing…' else if (last != null) 'Last synced ${_ago(last)}' else 'Not synced yet',
+                if (sync.lastResult != null) sync.lastResult!,
                 if (sync.lastError != null) sync.lastError!,
+                'This device: ${state.deviceId.substring(0, 8)}',
               ].join('\n')),
               isThreeLine: true,
             ),
@@ -74,6 +76,10 @@ class SyncCard extends StatelessWidget {
                   if (ok == true) await sync.disconnect();
                 },
                 child: const Text('Stop syncing'),
+              ),
+              TextButton(
+                onPressed: sync.running ? null : sync.resyncAll,
+                child: const Text('Resend everything'),
               ),
               FilledButton.tonal(
                 onPressed: sync.running ? null : sync.syncNow,

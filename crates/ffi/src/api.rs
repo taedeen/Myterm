@@ -515,6 +515,7 @@ impl MyTerm {
         // History and trusted host keys are sealed in the vault; load them
         // as soon as they can be read.
         Self::load_history(&mut st);
+        Self::load_audit(&mut st);
         st.load_known_hosts();
         Ok(())
     }
@@ -525,6 +526,7 @@ impl MyTerm {
         let mut st = self.st();
         st.vault.unlock(MasterKey::from_bytes(bytes));
         Self::load_history(&mut st);
+        Self::load_audit(&mut st);
         st.load_known_hosts();
         Ok(())
     }
@@ -548,6 +550,7 @@ impl MyTerm {
         // was never loaded into memory (e.g. saved before unlock finished)
         // can't be replaced by an empty copy. Merging is idempotent.
         Self::load_history(&mut st);
+        Self::load_audit(&mut st);
         let device = st.device_id.clone();
         let t = now();
         // Full history stays on this device; the synced copy leaves out hosts
@@ -575,8 +578,25 @@ impl MyTerm {
         let mut st = self.st();
         st.vault.load(records);
         Self::load_history(&mut st);
+        Self::load_audit(&mut st);
         st.load_known_hosts();
         Ok(())
+    }
+
+    /// Loads this device's saved audit log, so it carries on across restarts
+    /// instead of starting empty and replacing the saved copy on next save.
+    fn load_audit(st: &mut State) {
+        let id = format!("audit-{}", st.device_id);
+        let Ok(bytes) = st.vault.get(&id, "data") else { return };
+        let (saved, broken) = AuditLog::from_jsonl(&String::from_utf8_lossy(&bytes));
+        // Events recorded since unlocking are already in memory; keep
+        // whichever log is longer (the saved one, unless nothing was lost).
+        if saved.len() >= st.audit.len() {
+            st.audit = saved;
+            if let Some(seq) = broken {
+                st.audit.append(now(), AuditKind::SettingChanged, None, None, &format!("saved audit log failed verification at event {seq}"));
+            }
+        }
     }
 
     fn load_history(st: &mut State) {
@@ -645,6 +665,7 @@ impl MyTerm {
         }
         if changed > 0 {
             Self::load_history(&mut st);
+            Self::load_audit(&mut st);
             st.load_known_hosts();
         }
         Ok(changed)
@@ -682,6 +703,7 @@ impl MyTerm {
             st.vault.unlock(mk);
         }
         Self::load_history(&mut st);
+        Self::load_audit(&mut st);
         st.load_known_hosts();
         Ok(raw)
     }
@@ -704,6 +726,7 @@ impl MyTerm {
             }
         }
         Self::load_history(&mut st);
+        Self::load_audit(&mut st);
         Ok(changed)
     }
 
@@ -1189,6 +1212,11 @@ impl MyTerm {
 
     pub fn export_audit_jsonl(&self) -> String {
         self.st().audit.to_jsonl()
+    }
+
+    /// Records a sync outcome in the audit log (counts and errors only).
+    pub fn audit_sync(&self, detail: String) {
+        self.st().audit.append(now(), AuditKind::Sync, None, None, &detail);
     }
 }
 

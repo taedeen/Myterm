@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io' show Platform;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -249,13 +250,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
                 key: ObjectKey(s),
                 controller: terminalController,
                 style: terminalStyle(widget.state.terminalFontSize),
-                shortcuts: {
-                  const SingleActivator(LogicalKeyboardKey.equal, control: true): () => _zoom(1),
-                  const SingleActivator(LogicalKeyboardKey.numpadAdd, control: true): () => _zoom(1),
-                  const SingleActivator(LogicalKeyboardKey.minus, control: true): () => _zoom(-1),
-                  const SingleActivator(LogicalKeyboardKey.numpadSubtract, control: true): () => _zoom(-1),
-                  const SingleActivator(LogicalKeyboardKey.digit0, control: true): () => _zoom(0),
-                },
+                onZoom: _zoom,
                 onCopy: _copySelection,
               ),
             ),
@@ -516,7 +511,7 @@ class TerminalPane extends StatelessWidget {
     required this.terminal,
     required this.controller,
     required this.style,
-    this.shortcuts = const {},
+    this.onZoom,
     this.onCopy,
     this.autofocus = true,
   });
@@ -524,9 +519,25 @@ class TerminalPane extends StatelessWidget {
   final Terminal terminal;
   final TerminalController controller;
   final TerminalStyle style;
-  final Map<ShortcutActivator, VoidCallback> shortcuts;
+  /// Ctrl + = / - / 0: +1, -1, 0 (reset).
+  final void Function(int step)? onZoom;
   final VoidCallback? onCopy;
   final bool autofocus;
+
+  /// Handles the zoom keys before the terminal sees them.
+  KeyEventResult _zoomKey(KeyEvent event) {
+    final zoom = onZoom;
+    if (zoom == null || !HardwareKeyboard.instance.isControlPressed) return KeyEventResult.ignored;
+    final step = switch (event.logicalKey) {
+      LogicalKeyboardKey.equal || LogicalKeyboardKey.add || LogicalKeyboardKey.numpadAdd => 1,
+      LogicalKeyboardKey.minus || LogicalKeyboardKey.numpadSubtract => -1,
+      LogicalKeyboardKey.digit0 || LogicalKeyboardKey.numpad0 => 0,
+      _ => null,
+    };
+    if (step == null) return KeyEventResult.ignored;
+    if (event is! KeyUpEvent) zoom(step);
+    return KeyEventResult.handled;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -535,9 +546,7 @@ class TerminalPane extends StatelessWidget {
     // empty 0x0 placeholder, so on Windows the terminal got zero width and
     // drew a single centred column.
     return Stack(fit: StackFit.expand, children: [
-      CallbackShortcuts(
-        bindings: shortcuts,
-        child: TerminalView(
+      TerminalView(
           terminal,
           controller: controller,
           autofocus: autofocus,
@@ -546,8 +555,12 @@ class TerminalPane extends StatelessWidget {
           textStyle: style,
           // The size setting is the only scale, whatever the OS text size is.
           textScaler: TextScaler.noScaling,
+          // Windows: xterm's text-input client can't attach to the window
+          // ("view ID is null"), so typed characters never arrived and only
+          // keys like Enter worked. Read characters from key events instead.
+          hardwareKeyboardOnly: Platform.isWindows,
+          onKeyEvent: (_, event) => _zoomKey(event),
         ),
-      ),
       // Long-press (or drag) selects text; then offer Copy.
       Positioned(
         top: 8,
