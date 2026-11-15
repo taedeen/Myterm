@@ -56,6 +56,19 @@ pub struct HostDto {
     pub hardware_keys_only: Option<bool>,
     pub sync_history: Option<bool>,
     pub jump_chain: Vec<String>,
+    /// Sign in with this device's MyTerm SSH certificate.
+    pub use_certificate: Option<bool>,
+    /// Keep the shell running on the server in tmux and reattach to it
+    /// (including after a dropped connection, and from other devices).
+    pub persistent: Option<bool>,
+}
+
+/// This device's SSH certificate (see `ssh_certificate`).
+pub struct CertificateDto {
+    pub key_id: String,
+    pub principals: Vec<String>,
+    pub valid_after: u64,
+    pub valid_before: u64,
 }
 
 pub struct GroupDto {
@@ -248,6 +261,42 @@ fn bool_str(v: Option<bool>) -> &'static str {
 }
 
 impl State {
+    /// Every hop to reach `host_id`: jump hosts first (their own jump hosts
+    /// before them), the host itself last.
+    fn jump_path(&self, host_id: &str, groups: &HashMap<String, Group>) -> anyhow::Result<Vec<String>> {
+        fn walk(st: &State, id: &str, groups: &HashMap<String, Group>, seen: &mut Vec<String>, out: &mut Vec<String>) -> anyhow::Result<()> {
+            if seen.iter().any(|s| s == id) {
+                anyhow::bail!("jump hosts loop back to {id}");
+            }
+            if seen.len() > 8 {
+                anyhow::bail!("more than 8 jump hosts");
+            }
+            seen.push(id.to_string());
+            let h = st.host(id).ok_or_else(|| anyhow::anyhow!("unknown jump host {id}"))?;
+            let r = model::resolve(&st.model_host(&h), groups)?;
+            for j in &r.jump_chain {
+                if !out.iter().any(|o| o == j) {
+                    walk(st, j, groups, seen, out)?;
+                }
+            }
+            seen.pop();
+            out.push(id.to_string());
+            Ok(())
+        }
+        let mut out = Vec::new();
+        walk(self, host_id, groups, &mut Vec::new(), &mut out)?;
+        Ok(out)
+    }
+
+    /// This device's certificate key and certificate, if it has a current one.
+    fn certificate_auth_parts(&self) -> Option<(Vec<u8>, String)> {
+        let id = format!("certkey-{}", self.device_id);
+        let key = self.vault.get(&id, "private").ok()?.to_vec();
+        let cert = s(&self.vault.get(&id, "certificate").ok()?);
+        let info = ssh::certificate_info(&cert).ok()?;
+        (info.valid_before > now()).then_some((key, cert))
+    }
+
     fn field(&self, id: &str, f: &str) -> String {
         self.vault.get(id, f).map(|v| s(&v)).unwrap_or_default()
     }
@@ -331,6 +380,8 @@ impl State {
             hardware_keys_only: bool_field(&f("hardware_keys_only")),
             sync_history: bool_field(&f("sync_history")),
             jump_chain: f("jump_chain").split(',').filter(|t| !t.is_empty()).map(str::to_string).collect(),
+            use_certificate: bool_field(&f("use_certificate")),
+            persistent: bool_field(&f("persistent")),
         })
     }
 
@@ -815,6 +866,8 @@ impl MyTerm {
             ("hardware_keys_only", bool_str(host.hardware_keys_only).into()),
             ("sync_history", bool_str(host.sync_history).into()),
             ("jump_chain", host.jump_chain.join(",")),
+            ("use_certificate", bool_str(host.use_certificate).into()),
+            ("persistent", bool_str(host.persistent).into()),
         ];
         for (name, value) in fields {
             if st.vault.get(&id, name).map(|v| s(&v) != value).unwrap_or(true) {
@@ -1008,11 +1061,12 @@ impl MyTerm {
         cols: u32,
         rows: u32,
         auth: AuthChoice,
+        tmux_session: Option<String>,
         events: StreamSink<SessionEventDto>,
         confirm_host_key: impl Fn(String, u16, String, String) -> DartFnFuture<bool> + Send + Sync + 'static,
         hardware_sign: impl Fn(String, Vec<u8>) -> DartFnFuture<Vec<u8>> + Send + Sync + 'static,
     ) -> anyhow::Result<()> {
-        match self.connect_inner(host_id, cols, rows, auth, &events, confirm_host_key, hardware_sign).await {
+        match self.connect_inner(host_id, cols, rows, auth, tmux_session, &events, confirm_host_key, hardware_sign).await {
             Ok(()) => Ok(()),
             Err(e) => {
                 let _ = events.add(SessionEventDto::Error(e.to_string()));
@@ -1028,6 +1082,7 @@ impl MyTerm {
         cols: u32,
         rows: u32,
         auth: AuthChoice,
+        tmux_session: Option<String>,
         events: &StreamSink<SessionEventDto>,
         confirm_host_key: impl Fn(String, u16, String, String) -> DartFnFuture<bool> + Send + Sync + 'static,
         hardware_sign: impl Fn(String, Vec<u8>) -> DartFnFuture<Vec<u8>> + Send + Sync + 'static,
@@ -1036,10 +1091,9 @@ impl MyTerm {
         let (opts, final_host_id) = {
             let st = self.st();
             let groups = st.model_groups();
-            let host = st.host(&host_id).ok_or_else(|| anyhow::anyhow!("unknown host"))?;
-            let resolved = model::resolve(&st.model_host(&host), &groups)?;
-            let mut chain_ids = resolved.jump_chain.clone();
-            chain_ids.push(host_id.clone());
+            st.host(&host_id).ok_or_else(|| anyhow::anyhow!("unknown host"))?;
+            let chain_ids = st.jump_path(&host_id, &groups)?;
+            let cert = st.certificate_auth_parts();
             let mut chain = Vec::new();
             for (i, hid) in chain_ids.iter().enumerate() {
                 let is_last = i == chain_ids.len() - 1;
@@ -1058,6 +1112,12 @@ impl MyTerm {
                         sign: sign.clone(),
                     })),
                     (AuthChoice::Password { password }, true) => Auth::Password(SecretBuf::new(password.clone())),
+                    _ if h.use_certificate == Some(true) => {
+                        let (key, certificate) = cert.clone().ok_or_else(|| {
+                            anyhow::anyhow!("{} signs in with a MyTerm certificate, but this device has none yet: check Settings > Sync", h.label)
+                        })?;
+                        Auth::Certificate { openssh: SecretBuf::new(key), certificate }
+                    }
                     _ => {
                         let cred_id = r
                             .identity_id
@@ -1083,6 +1143,7 @@ impl MyTerm {
                     cols,
                     rows,
                     term: "xterm-256color".into(),
+                    command: tmux_session.as_deref().map(tmux_command),
                 },
                 host_id.clone(),
             )
@@ -1279,10 +1340,68 @@ impl MyTerm {
         self.st().audit.to_jsonl()
     }
 
+    // ----- SSH certificates (signed by the sync server's CA)
+
+    /// This device's public key for SSH certificates, created on first use.
+    /// The private key never leaves the device (not synced).
+    pub fn certificate_public_key(&self, comment: String) -> anyhow::Result<String> {
+        let mut st = self.st();
+        let id = format!("certkey-{}", st.device_id);
+        if let Ok(p) = st.vault.get(&id, "public") {
+            return Ok(s(&p));
+        }
+        let (private, public) = ssh::new_certificate_key(&comment)?;
+        let t = now();
+        st.vault.put("certkey", &id, "private", private.expose(), t)?;
+        st.vault.put("certkey", &id, "public", public.as_bytes(), t)?;
+        st.vault.set_device_only(&id, true)?;
+        Ok(public)
+    }
+
+    /// Stores a certificate from the server after checking it's for this
+    /// device's key.
+    pub fn set_ssh_certificate(&self, certificate: String) -> anyhow::Result<CertificateDto> {
+        let info = ssh::certificate_info(&certificate)?;
+        let mut st = self.st();
+        let id = format!("certkey-{}", st.device_id);
+        let public = s(&st.vault.get(&id, "public").map_err(|_| anyhow::anyhow!("no certificate key on this device"))?);
+        let two = |l: &str| l.split_whitespace().take(2).collect::<Vec<_>>().join(" ");
+        if two(&public) != two(&info.public_key) {
+            anyhow::bail!("that certificate is for a different key");
+        }
+        st.vault.put("certkey", &id, "certificate", certificate.trim().as_bytes(), now())?;
+        st.audit.append(now(), AuditKind::KeyEnrolled, None, None, &format!("ssh certificate {} until {}", info.key_id, info.valid_before));
+        Ok(cert_dto(info))
+    }
+
+    /// This device's current certificate, if any (expired ones included).
+    #[frb(sync)]
+    pub fn ssh_certificate(&self) -> Option<CertificateDto> {
+        let st = self.st();
+        let id = format!("certkey-{}", st.device_id);
+        let cert = s(&st.vault.get(&id, "certificate").ok()?);
+        ssh::certificate_info(&cert).ok().map(cert_dto)
+    }
+
     /// Records a sync outcome in the audit log (counts and errors only).
     pub fn audit_sync(&self, detail: String) {
         self.st().audit.append(now(), AuditKind::Sync, None, None, &detail);
     }
+}
+
+fn cert_dto(i: ssh::CertificateInfo) -> CertificateDto {
+    CertificateDto { key_id: i.key_id, principals: i.principals, valid_after: i.valid_after, valid_before: i.valid_before }
+}
+
+/// Runs the shell inside tmux session `name`, creating it or reattaching;
+/// falls back to a plain login shell where tmux isn't installed. Wrapped in
+/// `sh -c` so it works whatever the user's login shell is (fish included).
+fn tmux_command(name: &str) -> String {
+    let name: String = name.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').take(40).collect();
+    let name = if name.is_empty() { "myterm".to_string() } else { name };
+    format!(
+        "exec sh -c 'if command -v tmux >/dev/null 2>&1; then exec tmux new-session -A -s {name}; else echo \"tmux is not installed here: running a plain shell (the session will not survive a disconnect).\"; exec \"${{SHELL:-/bin/sh}}\" -l; fi'"
+    )
 }
 
 /// Sync id and token from the two HKDF outputs of a master key.
@@ -1304,4 +1423,17 @@ pub fn os_protect(data: Vec<u8>) -> anyhow::Result<Vec<u8>> {
 /// Windows: reverses [`os_protect`]. Errors elsewhere.
 pub fn os_unprotect(data: Vec<u8>) -> anyhow::Result<Vec<u8>> {
     crate::dpapi::unprotect(&data)
+}
+
+#[cfg(test)]
+mod tmux_tests {
+    use super::tmux_command;
+
+    #[test]
+    fn session_name_is_sanitised() {
+        let c = tmux_command("myterm-1; rm -rf /");
+        assert!(c.contains("new-session -A -s myterm-1rm-rf;"));
+        assert!(!c.contains("; rm"));
+        assert!(tmux_command("").contains("-s myterm;"));
+    }
 }

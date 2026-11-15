@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.0
+
+- **Keep session running (auto-reattach):** a per-host option that runs the
+  shell in tmux on the server. If the connection drops (Wi-Fi to mobile data,
+  sleep, server restart) MyTerm reconnects by itself and you're back where
+  you were. The same tab on another device opens the same session. Falls back
+  to a plain shell where tmux isn't installed.
+- **Jump hosts:** "Connect via" another host. Jump hosts may themselves go
+  through others; each hop uses its own saved credentials and host key check.
+- **Broadcast:** type in several sessions at once (the tower button). Typing,
+  key bar, paste, snippets and suggestions go to every ticked session; stored
+  passwords never do.
+- **SSH certificates:** the sync server can sign short-lived certificates for
+  each device's own key (Settings → SSH certificate). See server/README.md.
+- Backlog of further ideas in BACKLOG.md.
+
 ## 0.2.0
 
 The first release of the whole suite: Android app, Windows app, sync server

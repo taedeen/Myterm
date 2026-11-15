@@ -38,8 +38,11 @@ import json
 import logging
 import os
 import re
+import shutil
 import sqlite3
 import ssl
+import subprocess
+import tempfile
 import threading
 import time
 from http import HTTPStatus
@@ -265,6 +268,58 @@ class Store:
         return {"vaults": vaults}
 
 
+PUBKEY_RE = re.compile(r"^(ssh-ed25519|ecdsa-sha2-nistp256) [A-Za-z0-9+/]+={0,3}( [^\n]{0,100})?$")
+PRINCIPAL_RE = re.compile(r"^[a-z_][a-z0-9_.-]{0,31}$")
+
+
+class CertificateAuthority:
+    """Signs short-lived SSH user certificates for the vault's devices.
+
+    The CA's private key (ed25519) is created in the data volume on first
+    use. Servers that should accept MyTerm certificates trust its public key
+    (``TrustedUserCAKeys`` in sshd_config). A device asks with its vault
+    token; a revoked device has no valid token, and its last certificate
+    expires within ``hours``.
+    """
+
+    def __init__(self, key_path: str, principals: list[str], hours: int):
+        if not principals or not all(PRINCIPAL_RE.match(p) for p in principals):
+            raise ValueError("certificate principals must be login names, e.g. MYTERM_SYNC_CERT_PRINCIPALS=youruser,root")
+        if not 1 <= hours <= 168:
+            raise ValueError("MYTERM_SYNC_CERT_HOURS must be between 1 and 168")
+        self.keygen = shutil.which("ssh-keygen")
+        if not self.keygen:
+            raise ValueError("ssh-keygen is needed for certificates (openssh-client)")
+        self.key_path = key_path
+        self.principals = principals
+        self.hours = hours
+        self.lock = threading.Lock()
+        if not os.path.exists(key_path):
+            os.makedirs(os.path.dirname(os.path.abspath(key_path)), exist_ok=True)
+            subprocess.run(
+                [self.keygen, "-q", "-t", "ed25519", "-N", "", "-C", "myterm-user-ca", "-f", key_path],
+                check=True, capture_output=True,
+            )
+            log.info("created SSH user CA %s", key_path)
+
+    def public_key(self) -> str:
+        with open(self.key_path + ".pub") as f:
+            return f.read().strip()
+
+    def sign(self, public_key: str, key_id: str) -> str:
+        with self.lock, tempfile.TemporaryDirectory() as d:
+            pub = os.path.join(d, "user.pub")
+            with open(pub, "w") as f:
+                f.write(public_key.strip() + "\n")
+            subprocess.run(
+                [self.keygen, "-q", "-s", self.key_path, "-I", key_id, "-n", ",".join(self.principals),
+                 "-V", f"-5m:+{self.hours}h", pub],
+                check=True, capture_output=True, timeout=20,
+            )
+            with open(os.path.join(d, "user-cert.pub")) as f:
+                return f.read().strip()
+
+
 class RateLimiter:
     """Per-client sliding window for unauthenticated lookups and failed auth."""
 
@@ -319,6 +374,7 @@ class App:
         server_token: str,
         limiter: RateLimiter | None = None,
         trust_proxy: bool = False,
+        ca: CertificateAuthority | None = None,
     ):
         if len(server_token) < 24:
             raise ValueError("server token must be at least 24 characters")
@@ -328,6 +384,7 @@ class App:
         # Behind a reverse proxy every request comes from the proxy; trust its
         # X-Forwarded-For only when told to, or clients could spoof it.
         self.trust_proxy = trust_proxy
+        self.ca = ca
 
     # ---- auth
 
@@ -366,13 +423,19 @@ class App:
 
     # ---- routing
 
-    def handle(self, h: "Handler", method: str) -> tuple[HTTPStatus, dict]:
+    def handle(self, h: "Handler", method: str) -> tuple[HTTPStatus, dict | str]:
         url = urlparse(h.path)
         parts = [p for p in url.path.split("/") if p]
         query = parse_qs(url.query)
 
         if parts == ["v1", "health"] and method == "GET":
             return HTTPStatus.OK, {"ok": True, "protocol": PROTOCOL_VERSION}
+
+        if parts == ["v1", "ssh-ca.pub"] and method == "GET":
+            # Public: what servers put in TrustedUserCAKeys.
+            if self.ca is None:
+                raise ApiError(HTTPStatus.NOT_FOUND, "SSH certificates are not enabled on this server")
+            return HTTPStatus.OK, self.ca.public_key() + "\n"
 
         if parts == ["v1", "vaults"] and method == "POST":
             self.require_server_token(h)
@@ -425,6 +488,22 @@ class App:
                 self.store.move_vault(vault_id, new_id, auth_hash, validate_wrapped(body.get("wrapped")))
                 log.info("vault moved to a successor (device revoked)")
                 return HTTPStatus.CREATED, {"vault_id": new_id}
+
+            if rest == ["ssh-cert"] and method == "POST":
+                if self.ca is None:
+                    raise ApiError(HTTPStatus.NOT_FOUND, "SSH certificates are not enabled on this server")
+                public_key = str(h.json_body().get("public_key", "")).strip()
+                if not PUBKEY_RE.match(public_key):
+                    raise ApiError(HTTPStatus.BAD_REQUEST, "public_key: an ssh-ed25519 or ecdsa-sha2-nistp256 line")
+                label = re.sub(r"[^A-Za-z0-9._-]", "_", device_name or device or "device")
+                key_id = f"myterm:{vault_id[:8]}:{label}"[:120]
+                try:
+                    cert = self.ca.sign(public_key, key_id)
+                except subprocess.SubprocessError:
+                    log.exception("certificate signing failed")
+                    raise ApiError(HTTPStatus.BAD_REQUEST, "could not sign that key")
+                log.info("ssh certificate issued: %s", key_id)
+                return HTTPStatus.OK, {"certificate": cert, "principals": self.ca.principals, "hours": self.ca.hours}
 
             if rest == ["devices"] and method == "GET":
                 return HTTPStatus.OK, {"devices": self.store.devices(vault_id)}
@@ -526,9 +605,12 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:  # never leak internals
             log.exception("unhandled error")
             status, payload = HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "internal error"}
-        body = json.dumps(payload).encode()
+        if isinstance(payload, str):
+            body, ctype = payload.encode(), "text/plain; charset=utf-8"
+        else:
+            body, ctype = json.dumps(payload).encode(), "application/json"
         self.send_response(status)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         if self.close_connection:
@@ -582,7 +664,19 @@ def main() -> None:
         raise SystemExit("Set MYTERM_SYNC_TOKEN to a random string of at least 24 characters "
                          "(e.g. `openssl rand -hex 24`).")
     trust_proxy = os.environ.get("MYTERM_SYNC_TRUST_PROXY", "").lower() in ("1", "true", "yes")
-    app = App(Store(args.db), token, trust_proxy=trust_proxy)
+    ca = None
+    principals = [p.strip() for p in os.environ.get("MYTERM_SYNC_CERT_PRINCIPALS", "").split(",") if p.strip()]
+    if principals:
+        try:
+            ca = CertificateAuthority(
+                os.environ.get("MYTERM_SYNC_CA_KEY", os.path.join(os.path.dirname(os.path.abspath(args.db)), "ssh_user_ca")),
+                principals,
+                int(os.environ.get("MYTERM_SYNC_CERT_HOURS", "8")),
+            )
+        except (ValueError, subprocess.SubprocessError) as e:
+            raise SystemExit(f"SSH certificates: {e}")
+        log.info("SSH certificates on: principals %s, valid %d h", ",".join(principals), ca.hours)
+    app = App(Store(args.db), token, trust_proxy=trust_proxy, ca=ca)
     httpd = make_server(app, args.host, args.port, args.tls_cert, args.tls_key)
     scheme = "https" if args.tls_cert else "http"
     log.info("MyTerm sync listening on %s://%s:%d (db %s)", scheme, args.host, args.port, args.db)

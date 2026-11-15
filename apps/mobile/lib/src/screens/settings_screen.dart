@@ -18,6 +18,7 @@ class SettingsScreen extends StatelessWidget {
         child: Text('Settings', style: TextStyle(fontSize: 30, fontWeight: FontWeight.bold)),
       ),
       SyncCard(state: state),
+      CertificateCard(state: state),
       Card(
         child: ListTile(
           leading: const Icon(Icons.keyboard),

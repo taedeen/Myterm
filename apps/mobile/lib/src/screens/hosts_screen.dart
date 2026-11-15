@@ -149,6 +149,10 @@ class _HostEditScreenState extends State<HostEditScreen> {
   late String? _hardwareKeyId = widget.host?.hardwareKeyId;
   late bool _hardwareOnly = widget.host?.hardwareKeysOnly ?? false;
   late bool _syncHistory = widget.host?.syncHistory ?? true;
+  late bool _useCertificate = widget.host?.useCertificate ?? false;
+  late bool _persistent = widget.host?.persistent ?? false;
+  // One jump host is picked here; it may itself go through others.
+  late String? _jumpHostId = (widget.host?.jumpChain.isNotEmpty ?? false) ? widget.host!.jumpChain.last : null;
   List<HardwareKey> _hwKeys = [];
 
   @override
@@ -197,7 +201,9 @@ class _HostEditScreenState extends State<HostEditScreen> {
         keybarProfileId: widget.host?.keybarProfileId,
         hardwareKeysOnly: _hardwareOnly,
         syncHistory: _syncHistory,
-        jumpChain: widget.host?.jumpChain ?? const [],
+        jumpChain: _jumpHostId == null ? const [] : [_jumpHostId!],
+        useCertificate: _useCertificate,
+        persistent: _persistent,
       );
       _credentialId = await widget.state.saveHostPassword(
         draft,
@@ -221,7 +227,9 @@ class _HostEditScreenState extends State<HostEditScreen> {
         keybarProfileId: widget.host?.keybarProfileId,
         hardwareKeysOnly: _hardwareOnly,
         syncHistory: _syncHistory,
-        jumpChain: widget.host?.jumpChain ?? const [],
+        jumpChain: _jumpHostId == null ? const [] : [_jumpHostId!],
+        useCertificate: _useCertificate,
+        persistent: _persistent,
       ),
     );
     await widget.state.save();
@@ -237,6 +245,11 @@ class _HostEditScreenState extends State<HostEditScreen> {
   @override
   Widget build(BuildContext context) {
     final creds = widget.state.core.listCredentials();
+    // Any other host can be a jump host, except ones that go through this one.
+    final jumpHosts = widget.state.core
+        .listHosts()
+        .where((h) => h.id != widget.host?.id && !(widget.host != null && h.jumpChain.contains(widget.host!.id)))
+        .toList();
     final hasSavedPassword = creds.any((c) => c.id == _credentialId && c.kind == CredentialKind.password);
     InputDecoration dec(String l) => InputDecoration(labelText: l, border: const OutlineInputBorder());
     return Scaffold(
@@ -303,6 +316,31 @@ class _HostEditScreenState extends State<HostEditScreen> {
             for (final k in _hwKeys) DropdownMenuItem(value: k.alias, child: Text('${k.alias} (${k.protection})')),
           ],
           onChanged: (v) => setState(() => _hardwareKeyId = v),
+        ),
+        DropdownButtonFormField<String?>(
+          value: jumpHosts.any((h) => h.id == _jumpHostId) ? _jumpHostId : null,
+          decoration: dec('Connect via (jump host)').copyWith(
+            helperText: 'For machines only reachable through another host, e.g. server1',
+          ),
+          items: [
+            const DropdownMenuItem(value: null, child: Text('Direct')),
+            for (final h in jumpHosts)
+              DropdownMenuItem(value: h.id, child: Text(h.label.isEmpty ? h.address : h.label)),
+          ],
+          onChanged: (v) => setState(() => _jumpHostId = v),
+        ),
+        SwitchListTile(
+          title: const Text('Keep session running'),
+          subtitle: const Text('Runs in tmux on the server: reconnects by itself after a dropped connection, '
+              'and the same tab on another device picks up where you left off'),
+          value: _persistent,
+          onChanged: (v) => setState(() => _persistent = v),
+        ),
+        SwitchListTile(
+          title: const Text('Sign in with MyTerm certificate'),
+          subtitle: const Text('A short-lived certificate from your sync server (Settings > SSH certificate)'),
+          value: _useCertificate,
+          onChanged: (v) => setState(() => _useCertificate = v),
         ),
         SwitchListTile(
           title: const Text('Hardware keys only'),
