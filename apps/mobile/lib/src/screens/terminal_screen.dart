@@ -518,6 +518,7 @@ class TerminalPane extends StatelessWidget {
     required this.style,
     this.shortcuts = const {},
     this.onCopy,
+    this.autofocus = true,
   });
 
   final Terminal terminal;
@@ -525,6 +526,7 @@ class TerminalPane extends StatelessWidget {
   final TerminalStyle style;
   final Map<ShortcutActivator, VoidCallback> shortcuts;
   final VoidCallback? onCopy;
+  final bool autofocus;
 
   @override
   Widget build(BuildContext context) {
@@ -538,7 +540,7 @@ class TerminalPane extends StatelessWidget {
         child: TerminalView(
           terminal,
           controller: controller,
-          autofocus: true,
+          autofocus: autofocus,
           backgroundOpacity: 0,
           theme: TerminalThemes.defaultTheme,
           textStyle: style,

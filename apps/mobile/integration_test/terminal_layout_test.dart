@@ -76,7 +76,7 @@ void main() {
             width: 800,
             height: 400,
             child: Column(children: [
-              Expanded(child: TerminalPane(terminal: terminal, controller: controller, style: terminalStyle(14))),
+              Expanded(child: TerminalPane(terminal: terminal, controller: controller, style: terminalStyle(14), autofocus: false)),
               const SizedBox(height: 40),
             ]),
           ),
