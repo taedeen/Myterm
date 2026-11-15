@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 import 'app_state.dart';
+import 'rust/api.dart' show CertificateDto;
 
 class SyncError implements Exception {
   SyncError(this.message, [this.status, this.body = const {}]);
