@@ -189,6 +189,36 @@ class _TerminalScreenState extends State<TerminalScreen> {
     s.terminal.paste(text);
   }
 
+  /// Keyboard use of the suggestion bar: Tab / Shift+Tab move the highlight,
+  /// Enter runs the highlighted one, Esc drops the highlight. Tab reaches the
+  /// shell as usual when there are no suggestions (and from the key bar).
+  KeyEventResult _suggestionKey(KeyEvent event) {
+    final key = event.logicalKey;
+    if (event is KeyUpEvent) {
+      return (key == LogicalKeyboardKey.tab && s.suggestions.isNotEmpty) ||
+              (key == LogicalKeyboardKey.enter && s.selected != null)
+          ? KeyEventResult.handled
+          : KeyEventResult.ignored;
+    }
+    if (key == LogicalKeyboardKey.tab && s.suggestions.isNotEmpty) {
+      s.selectNext(back: HardwareKeyboard.instance.isShiftPressed);
+      return KeyEventResult.handled;
+    }
+    final sel = s.selected;
+    if (sel != null) {
+      if (key == LogicalKeyboardKey.enter || key == LogicalKeyboardKey.numpadEnter) {
+        s.accept(s.suggestions[sel]);
+        return KeyEventResult.handled;
+      }
+      if (key == LogicalKeyboardKey.escape) {
+        s.clearSelection();
+        return KeyEventResult.handled;
+      }
+      s.clearSelection(); // any other key: back to plain typing
+    }
+    return KeyEventResult.ignored;
+  }
+
   /// Text size: +1, -1, or 0 for the default.
   void _zoom(int step) {
     final st = widget.state;
@@ -251,10 +281,11 @@ class _TerminalScreenState extends State<TerminalScreen> {
                 controller: terminalController,
                 style: terminalStyle(widget.state.terminalFontSize),
                 onZoom: _zoom,
+                onKey: _suggestionKey,
                 onCopy: _copySelection,
               ),
             ),
-            SuggestionBar(suggestions: s.suggestions, onAccept: s.accept),
+            SuggestionBar(suggestions: s.suggestions, selected: s.selected, onAccept: s.accept),
             _SessionTabs(
               sessions: widget.state.sessions,
               current: s,
@@ -512,6 +543,7 @@ class TerminalPane extends StatelessWidget {
     required this.controller,
     required this.style,
     this.onZoom,
+    this.onKey,
     this.onCopy,
     this.autofocus = true,
   });
@@ -521,6 +553,9 @@ class TerminalPane extends StatelessWidget {
   final TerminalStyle style;
   /// Ctrl + = / - / 0: +1, -1, 0 (reset).
   final void Function(int step)? onZoom;
+
+  /// Sees each key before the terminal; return handled to keep it there.
+  final KeyEventResult Function(KeyEvent event)? onKey;
   final VoidCallback? onCopy;
   final bool autofocus;
 
@@ -559,7 +594,11 @@ class TerminalPane extends StatelessWidget {
           // ("view ID is null"), so typed characters never arrived and only
           // keys like Enter worked. Read characters from key events instead.
           hardwareKeyboardOnly: Platform.isWindows,
-          onKeyEvent: (_, event) => _zoomKey(event),
+          onKeyEvent: (_, event) {
+            final r = _zoomKey(event);
+            if (r != KeyEventResult.ignored) return r;
+            return onKey?.call(event) ?? KeyEventResult.ignored;
+          },
         ),
       // Long-press (or drag) selects text; then offer Copy.
       Positioned(
