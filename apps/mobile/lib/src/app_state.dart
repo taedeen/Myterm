@@ -151,7 +151,7 @@ class AppState extends ChangeNotifier {
 
   void _unlocked() {
     sync.start();
-    sync.soon();
+    sync.syncNow(); // pick up other devices' changes straight away
   }
 
   /// First run. Returns false if biometric unlock could not be set up
@@ -217,8 +217,12 @@ class AppState extends ChangeNotifier {
     for (final s in List.of(sessions)) {
       closeSession(s);
     }
-    sync.stop();
     await save(syncAfter: false);
+    // Push changes made in the last few seconds before the key is gone;
+    // previously the pending sync was cancelled here and a host added just
+    // before backgrounding the app stayed on this device.
+    await sync.flush();
+    sync.stop();
     core.lock();
     notifyListeners();
   }

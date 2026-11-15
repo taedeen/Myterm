@@ -31,6 +31,9 @@ class SyncService extends ChangeNotifier {
   Timer? _periodic;
   Timer? _debounce;
   bool _running = false;
+  /// A sync was asked for while one was running: run again after it, so a
+  /// change made mid-sync isn't left waiting for the next minute.
+  bool _again = false;
   bool get running => _running;
   String? lastError;
 
@@ -204,10 +207,27 @@ class SyncService extends ChangeNotifier {
     _debounce = Timer(const Duration(seconds: 5), syncNow);
   }
 
+  /// Pushes pending changes now (before locking or going to the background),
+  /// waiting at most [limit].
+  Future<void> flush({Duration limit = const Duration(seconds: 15)}) async {
+    if (!configured || !state.unlocked) return;
+    _debounce?.cancel();
+    try {
+      await syncNow().timeout(limit);
+    } on TimeoutException {
+      // Best effort: the next unlock syncs whatever is still pending.
+    }
+  }
+
   Future<void> syncNow() async {
     final base = url;
-    if (_running || base == null || !state.unlocked) return;
+    if (base == null || !state.unlocked) return;
+    if (_running) {
+      _again = true;
+      return;
+    }
     _running = true;
+    _again = false;
     notifyListeners();
     try {
       final id = state.core.syncIdentity();
@@ -263,6 +283,10 @@ class SyncService extends ChangeNotifier {
     } finally {
       _running = false;
       notifyListeners();
+    }
+    if (_again && state.unlocked) {
+      _again = false;
+      await syncNow();
     }
   }
 
