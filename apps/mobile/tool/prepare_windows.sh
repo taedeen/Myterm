@@ -18,6 +18,13 @@ rm -f test/widget_test.dart
 # Window title and exe name.
 sed -i 's/window.Create(L"myterm"/window.Create(L"MyTerm"/' windows/runner/main.cpp
 sed -i 's/set(BINARY_NAME "myterm")/set(BINARY_NAME "MyTerm")/' windows/CMakeLists.txt
+# local_auth_windows still compiles with MSVC's old /await coroutines, which
+# Visual Studio 2026 (MSVC 14.5x) rejects unless this is defined. Set it for
+# every target, plugins included (they're added after this line).
+grep -q _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS windows/CMakeLists.txt || \
+  sed -i '/^project(/a add_compile_definitions(_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)' windows/CMakeLists.txt
+grep -q _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS windows/CMakeLists.txt \
+  || { echo "could not patch windows/CMakeLists.txt" >&2; exit 1; }
 
 echo "==> Dart packages and Rust bindings"
 flutter pub get
