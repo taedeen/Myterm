@@ -110,12 +110,15 @@ and `--list` says which branch. Downloads are kept in `~/apks/<repo>/`
 (newest as `<repo>-latest.apk`, plus 3 older).
 
 **Installing:**
-- **Picking the device:** you can choose a device that's already connected
-  (USB, or wireless from earlier). Otherwise it asks for the IP, the pairing
-  port and code (first time only), and the connection port, remembering the
-  last IP and port.
-- **After installing**, it reads the app's package and version from the APK,
-  shows the installed version, and opens the app.
+- **Picking the device:** choose a device that's already connected (USB, or
+  wireless from earlier), one from the **known devices** list, or a new one.
+  Every device you install to is remembered in `~/.config/apk/adb-devices`
+  (IP, connection port, pairing port, model), most recent first, so pressing
+  Enter reuses its address and ports. A known device skips pairing unless you
+  ask to pair again (then its saved pairing port is offered). Android changes
+  the ports when Wireless debugging is turned back on; type the new ones and
+  they're saved. The device saved by older versions (`~/.config/myjam/adb-last`)
+  is brought in on first run.
 - **Signed with a different key:** if the device's copy was signed with
   another key, it explains that an in-place update isn't possible. It
   uninstalls first only if you type `yes`, because that deletes the app's
