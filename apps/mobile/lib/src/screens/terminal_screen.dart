@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:xterm/xterm.dart';
 
 import '../app_state.dart';
@@ -168,6 +169,24 @@ class _TerminalScreenState extends State<TerminalScreen> {
     );
   }
 
+  Future<void> _copySelection() async {
+    final sel = terminalController.selection;
+    if (sel == null) return;
+    final text = s.terminal.buffer.getText(sel).trimRight();
+    terminalController.clearSelection();
+    if (text.isEmpty) return;
+    await Clipboard.setData(ClipboardData(text: text));
+    _toast('Copied ${text.length} characters');
+  }
+
+  /// Pastes the clipboard into the session (bracketed paste when the shell asks for it).
+  Future<void> _paste() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final text = data?.text;
+    if (text == null || text.isEmpty || !s.isLive) return;
+    s.terminal.paste(text);
+  }
+
   /// Closes [target] (the current session by default). Moves to a
   /// neighbouring tab, or leaves the screen when it was the last one.
   void _close([TerminalSession? target]) {
@@ -208,14 +227,41 @@ class _TerminalScreenState extends State<TerminalScreen> {
                 ],
               ),
             Expanded(
-              child: TerminalView(
-                s.terminal,
-                key: ObjectKey(s),
-                controller: terminalController,
-                autofocus: true,
-                backgroundOpacity: 0,
-                theme: TerminalThemes.defaultTheme,
-              ),
+              child: Stack(children: [
+                Positioned.fill(
+                  child: TerminalView(
+                    s.terminal,
+                    key: ObjectKey(s),
+                    controller: terminalController,
+                    autofocus: true,
+                    backgroundOpacity: 0,
+                    theme: TerminalThemes.defaultTheme,
+                  ),
+                ),
+                // Long-press selects text; then offer Copy.
+                ListenableBuilder(
+                  listenable: terminalController,
+                  builder: (context, _) => terminalController.selection == null
+                      ? const SizedBox.shrink()
+                      : Positioned(
+                          top: 8,
+                          right: 8,
+                          child: Row(mainAxisSize: MainAxisSize.min, children: [
+                            FilledButton.tonalIcon(
+                              onPressed: _copySelection,
+                              icon: const Icon(Icons.copy, size: 18),
+                              label: const Text('Copy'),
+                            ),
+                            const SizedBox(width: 4),
+                            IconButton.filledTonal(
+                              tooltip: 'Clear selection',
+                              onPressed: terminalController.clearSelection,
+                              icon: const Icon(Icons.close, size: 18),
+                            ),
+                          ]),
+                        ),
+                ),
+              ]),
             ),
             SuggestionBar(suggestions: s.suggestions, onAccept: s.accept),
             _SessionTabs(
@@ -226,6 +272,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
               onSelect: _switchTo,
               onClose: _close,
               onNew: _newSession,
+              onPaste: _paste,
             ),
             KeyBar(
               profile: profile,
@@ -251,6 +298,7 @@ class _SessionTabs extends StatelessWidget {
     required this.onSelect,
     required this.onClose,
     required this.onNew,
+    required this.onPaste,
   });
 
   final List<TerminalSession> sessions;
@@ -260,6 +308,7 @@ class _SessionTabs extends StatelessWidget {
   final void Function(TerminalSession) onSelect;
   final void Function(TerminalSession) onClose;
   final VoidCallback onNew;
+  final VoidCallback onPaste;
 
   static final _compact = IconButton.styleFrom(
     minimumSize: const Size(33, 33),
@@ -309,6 +358,14 @@ class _SessionTabs extends StatelessWidget {
               },
             ),
           ),
+        ),
+        const SizedBox(width: 4),
+        IconButton.filledTonal(
+          style: _compact,
+          iconSize: 18,
+          onPressed: onPaste,
+          tooltip: 'Paste',
+          icon: const Icon(Icons.content_paste),
         ),
         const SizedBox(width: 4),
         IconButton.filledTonal(

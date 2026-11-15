@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../app_state.dart';
 import '../sync_service.dart';
@@ -113,6 +114,19 @@ class _SyncSetupScreenState extends State<SyncSetupScreen> {
     super.dispose();
   }
 
+  /// A paste button for a field: fills it from the clipboard (trimmed).
+  Widget _pasteInto(TextEditingController c) => IconButton(
+        tooltip: 'Paste',
+        icon: const Icon(Icons.content_paste),
+        onPressed: () async {
+          final t = (await Clipboard.getData(Clipboard.kTextPlain))?.text?.trim();
+          if (t == null || t.isEmpty) return;
+          // Accept a whole .env line too: MYTERM_SYNC_TOKEN=abc… -> abc…
+          c.text = t.startsWith('MYTERM_SYNC_TOKEN=') ? t.substring('MYTERM_SYNC_TOKEN='.length) : t;
+          setState(() {});
+        },
+      );
+
   Future<void> _go() async {
     setState(() {
       _busy = true;
@@ -166,7 +180,7 @@ class _SyncSetupScreenState extends State<SyncSetupScreen> {
           controller: _url,
           keyboardType: TextInputType.url,
           autocorrect: false,
-          decoration: dec('Server address', 'Default ${SyncService.defaultUrl}'),
+          decoration: dec('Server address', 'Default ${SyncService.defaultUrl}').copyWith(suffixIcon: _pasteInto(_url)),
         ),
         const SizedBox(height: 12),
         TextField(
@@ -174,7 +188,12 @@ class _SyncSetupScreenState extends State<SyncSetupScreen> {
           obscureText: true,
           autocorrect: false,
           enableSuggestions: false,
-          decoration: dec('Server token', 'MYTERM_SYNC_TOKEN from the server. Only used for this setup; not stored.'),
+          decoration: dec(
+            'Server token',
+            'MYTERM_SYNC_TOKEN from the server\'s .env. Copy it from a MyTerm session to dbb '
+                '(cat ~/docker_volumes/myterm-sync/server/.env, long-press, Copy), then paste here. '
+                'Only used for this setup; not stored.',
+          ).copyWith(suffixIcon: _pasteInto(_token)),
         ),
         const SizedBox(height: 12),
         TextField(
