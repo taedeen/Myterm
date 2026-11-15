@@ -9,6 +9,7 @@ import '../app_state.dart';
 import '../native.dart';
 import '../rust/api.dart';
 import '../terminal_session.dart';
+import '../terminal_style.dart';
 import '../widgets/key_bar.dart';
 import '../widgets/suggestion_bar.dart';
 
@@ -187,6 +188,22 @@ class _TerminalScreenState extends State<TerminalScreen> {
     s.terminal.paste(text);
   }
 
+  /// Text size: +1, -1, or 0 for the default.
+  void _zoom(int step) {
+    final st = widget.state;
+    st.terminalFontSize = step == 0 ? defaultTerminalFontSize : st.terminalFontSize + step;
+  }
+
+  Future<void> _textSizeSheet() => showModalBottomSheet<void>(
+        context: context,
+        builder: (ctx) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+            child: TextSizeControl(state: widget.state),
+          ),
+        ),
+      );
+
   /// Closes [target] (the current session by default). Moves to a
   /// neighbouring tab, or leaves the screen when it was the last one.
   void _close([TerminalSession? target]) {
@@ -229,13 +246,26 @@ class _TerminalScreenState extends State<TerminalScreen> {
             Expanded(
               child: Stack(children: [
                 Positioned.fill(
-                  child: TerminalView(
-                    s.terminal,
-                    key: ObjectKey(s),
-                    controller: terminalController,
-                    autofocus: true,
-                    backgroundOpacity: 0,
-                    theme: TerminalThemes.defaultTheme,
+                  child: CallbackShortcuts(
+                    bindings: {
+                      const SingleActivator(LogicalKeyboardKey.equal, control: true): () => _zoom(1),
+                      const SingleActivator(LogicalKeyboardKey.numpadAdd, control: true): () => _zoom(1),
+                      const SingleActivator(LogicalKeyboardKey.minus, control: true): () => _zoom(-1),
+                      const SingleActivator(LogicalKeyboardKey.numpadSubtract, control: true): () => _zoom(-1),
+                      const SingleActivator(LogicalKeyboardKey.digit0, control: true): () => _zoom(0),
+                    },
+                    child: TerminalView(
+                      s.terminal,
+                      key: ObjectKey(s),
+                      controller: terminalController,
+                      autofocus: true,
+                      backgroundOpacity: 0,
+                      theme: TerminalThemes.defaultTheme,
+                      // The size setting is the only scale, so the grid is the
+                      // same whatever the OS text-size setting is.
+                      textStyle: terminalStyle(widget.state.terminalFontSize),
+                      textScaler: TextScaler.noScaling,
+                    ),
                   ),
                 ),
                 // Long-press selects text; then offer Copy.
@@ -273,6 +303,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
               onClose: _close,
               onNew: _newSession,
               onPaste: _paste,
+              onTextSize: _textSizeSheet,
             ),
             KeyBar(
               profile: profile,
@@ -299,6 +330,7 @@ class _SessionTabs extends StatelessWidget {
     required this.onClose,
     required this.onNew,
     required this.onPaste,
+    required this.onTextSize,
   });
 
   final List<TerminalSession> sessions;
@@ -309,6 +341,7 @@ class _SessionTabs extends StatelessWidget {
   final void Function(TerminalSession) onClose;
   final VoidCallback onNew;
   final VoidCallback onPaste;
+  final VoidCallback onTextSize;
 
   static final _compact = IconButton.styleFrom(
     minimumSize: const Size(33, 33),
@@ -358,6 +391,14 @@ class _SessionTabs extends StatelessWidget {
               },
             ),
           ),
+        ),
+        const SizedBox(width: 4),
+        IconButton.filledTonal(
+          style: _compact,
+          iconSize: 18,
+          onPressed: onTextSize,
+          tooltip: 'Text size (Ctrl + = / - / 0)',
+          icon: const Icon(Icons.format_size),
         ),
         const SizedBox(width: 4),
         IconButton.filledTonal(
@@ -432,6 +473,71 @@ class _Tab extends StatelessWidget {
           ]),
         ),
       ),
+    );
+  }
+}
+
+/// A − / size / + row with a slider and a reset. Used in Settings and in the
+/// terminal's Aa sheet; changes apply to open terminals at once.
+class TextSizeControl extends StatelessWidget {
+  const TextSizeControl({super.key, required this.state});
+  final AppState state;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: state,
+      builder: (context, _) {
+        final size = state.terminalFontSize;
+        return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            const Icon(Icons.format_size),
+            const SizedBox(width: 12),
+            const Expanded(child: Text('Terminal text size')),
+            TextButton(
+              onPressed: size == defaultTerminalFontSize
+                  ? null
+                  : () => state.terminalFontSize = defaultTerminalFontSize,
+              child: const Text('Reset'),
+            ),
+          ]),
+          Row(children: [
+            IconButton(
+              tooltip: 'Smaller',
+              onPressed: size <= minTerminalFontSize ? null : () => state.terminalFontSize = size - 1,
+              icon: const Icon(Icons.remove),
+            ),
+            Expanded(
+              child: Slider(
+                value: size,
+                min: minTerminalFontSize,
+                max: maxTerminalFontSize,
+                divisions: (maxTerminalFontSize - minTerminalFontSize).round(),
+                label: size.round().toString(),
+                onChanged: (v) => state.terminalFontSize = v,
+              ),
+            ),
+            IconButton(
+              tooltip: 'Larger',
+              onPressed: size >= maxTerminalFontSize ? null : () => state.terminalFontSize = size + 1,
+              icon: const Icon(Icons.add),
+            ),
+            SizedBox(width: 28, child: Text('${size.round()}', textAlign: TextAlign.end)),
+          ]),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(8),
+            color: const Color(0xFF151827),
+            child: Text(
+              'user@host:~\$ ls -la',
+              maxLines: 1,
+              overflow: TextOverflow.clip,
+              style: terminalStyle(size).toTextStyle(color: const Color(0xFFE5E5E5)),
+              textScaler: TextScaler.noScaling,
+            ),
+          ),
+        ]);
+      },
     );
   }
 }
