@@ -16,6 +16,7 @@ pub enum AuditKind {
     KeyEnrolled,
     DeviceRevoked,
     SettingChanged,
+    Sync,
 }
 
 impl AuditKind {
@@ -29,7 +30,51 @@ impl AuditKind {
             AuditKind::KeyEnrolled => "key_enrolled",
             AuditKind::DeviceRevoked => "device_revoked",
             AuditKind::SettingChanged => "setting_changed",
+            AuditKind::Sync => "sync",
         }
+    }
+
+    fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "connect" => AuditKind::Connect,
+            "disconnect" => AuditKind::Disconnect,
+            "credential_typed" => AuditKind::CredentialTyped,
+            "host_key_approved" => AuditKind::HostKeyApproved,
+            "host_key_changed_rejected" => AuditKind::HostKeyChangedRejected,
+            "key_enrolled" => AuditKind::KeyEnrolled,
+            "device_revoked" => AuditKind::DeviceRevoked,
+            "setting_changed" => AuditKind::SettingChanged,
+            "sync" => AuditKind::Sync,
+            _ => return None,
+        })
+    }
+}
+
+/// Reads one `"name":` value from a line written by [`AuditLog::to_jsonl`]:
+/// a number, or a string with the escapes `to_jsonl` produces.
+fn json_value(line: &str, name: &str) -> Option<String> {
+    let key = format!("\"{name}\":");
+    let start = line.find(&key)? + key.len();
+    let rest = &line[start..];
+    if let Some(body) = rest.strip_prefix('"') {
+        let mut out = String::new();
+        let mut chars = body.chars();
+        while let Some(c) = chars.next() {
+            match c {
+                '"' => return Some(out),
+                '\\' => match chars.next()? {
+                    'u' => {
+                        let hex: String = chars.by_ref().take(4).collect();
+                        out.push(char::from_u32(u32::from_str_radix(&hex, 16).ok()?)?);
+                    }
+                    other => out.push(other),
+                },
+                c => out.push(c),
+            }
+        }
+        None
+    } else {
+        Some(rest.chars().take_while(|c| c.is_ascii_digit()).collect())
     }
 }
 
@@ -108,6 +153,42 @@ impl AuditLog {
         Ok(())
     }
 
+    /// Rebuilds a log saved with [`AuditLog::to_jsonl`] by replaying its
+    /// events, which recomputes the hash chain. Returns the log and the
+    /// sequence number of the first event whose saved hash doesn't match (the
+    /// saved log was altered), if any. Unreadable lines are skipped.
+    pub fn from_jsonl(text: &str) -> (AuditLog, Option<u64>) {
+        let mut log = AuditLog::default();
+        let mut broken = None;
+        for line in text.lines().filter(|l| !l.trim().is_empty()) {
+            let parsed = (|| {
+                let at = json_value(line, "at")?.parse().ok()?;
+                let kind = AuditKind::parse(&json_value(line, "kind")?)?;
+                let host = json_value(line, "host_id")?;
+                let cred = json_value(line, "credential_id")?;
+                let detail = json_value(line, "detail")?;
+                let hash = json_value(line, "hash")?;
+                Some((at, kind, host, cred, detail, hash))
+            })();
+            let Some((at, kind, host, cred, detail, hash)) = parsed else { continue };
+            let opt = |s: &str| if s.is_empty() { None } else { Some(s.to_string()) };
+            let (host, cred) = (opt(&host), opt(&cred));
+            let e = log.append(at, kind, host.as_deref(), cred.as_deref(), &detail);
+            if broken.is_none() && sha256::hex(&e.hash) != hash {
+                broken = Some(e.seq);
+            }
+        }
+        (log, broken)
+    }
+
+    pub fn len(&self) -> usize {
+        self.events.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.events.is_empty()
+    }
+
     /// JSON Lines export for a SIEM. Minimal escaping of `"` and `\` and control chars.
     pub fn to_jsonl(&self) -> String {
         fn esc(s: &str) -> String {
@@ -159,6 +240,21 @@ mod tests {
         let mut removed = log.events().to_vec();
         removed.remove(1);
         assert_eq!(AuditLog::verify(&removed), Err(1));
+    }
+
+    #[test]
+    fn jsonl_round_trips() {
+        let mut log = AuditLog::default();
+        log.append(1, AuditKind::Connect, Some("server1"), None, "ssh \"x\"\n\\ é");
+        log.append(2, AuditKind::Sync, None, None, "pulled 3, pushed 1");
+        log.append(3, AuditKind::CredentialTyped, Some("server1"), Some("cred-sudo"), "");
+        let (back, broken) = AuditLog::from_jsonl(&log.to_jsonl());
+        assert_eq!(broken, None);
+        assert_eq!(back.events(), log.events());
+
+        let tampered = log.to_jsonl().replace("pulled 3", "pulled 4");
+        let (_, broken) = AuditLog::from_jsonl(&tampered);
+        assert_eq!(broken, Some(1));
     }
 
     #[test]
