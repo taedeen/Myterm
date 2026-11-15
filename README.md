@@ -90,6 +90,7 @@ Version 0.2.0 (see [CHANGELOG.md](CHANGELOG.md)).
 ## Releasing
 
 Bump `version:` in `apps/mobile/pubspec.yaml` and `lib/src/version.dart`, add
-a section to `CHANGELOG.md`, merge to `main`, then tag `vX.Y.Z` and push the
-tag. CI builds everything, checks the Windows signatures, and publishes the
-GitHub release with the APK, installer, portable zip and certificates.
+a section to `CHANGELOG.md`, and merge to `main`. When `main` has a version
+with no release yet, CI builds everything, checks the Windows signatures, tags
+`vX.Y.Z` and publishes the GitHub release with the APK, installer, portable
+zip and certificates.
