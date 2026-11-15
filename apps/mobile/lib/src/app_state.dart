@@ -33,10 +33,11 @@ class AppState extends ChangeNotifier {
   static final navigatorKey = GlobalKey<NavigatorState>();
 
   int get liveCount => sessions.where((s) => s.isLive).length;
-  String _keybarProfileId = 'builtin-tmux';
-  String get keybarProfileId => _keybarProfileId;
+  /// Default key bar (Settings), kept across restarts. Basic unless changed.
+  String get keybarProfileId => _meta['keybarProfileId'] as String? ?? 'builtin-basic';
   set keybarProfileId(String id) {
-    _keybarProfileId = id;
+    _meta['keybarProfileId'] = id;
+    _writeMeta();
     notifyListeners();
   }
 
