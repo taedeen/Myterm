@@ -28,6 +28,13 @@ class _HardwareKeysScreenState extends State<HardwareKeysScreen> {
   }
 
   Future<void> _create() async {
+    if (!Native.hardwareKeysSupported) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text("Hardware keys aren't available on Windows yet. Use a key from the Keychain, "
+            'or a hardware key on your phone.'),
+      ));
+      return;
+    }
     final alias = 'phone-${DateTime.now().millisecondsSinceEpoch ~/ 1000}';
     try {
       await Native.generateHardwareKey(alias);

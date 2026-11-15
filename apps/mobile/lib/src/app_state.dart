@@ -92,7 +92,9 @@ class AppState extends ChangeNotifier {
   File get _storeFile => File('${_dir.path}/store.bin');
 
   Future<void> init() async {
-    await RustLib.init(externalLibrary: ExternalLibrary.open('libmyterm_ffi.so'));
+    await RustLib.init(
+      externalLibrary: ExternalLibrary.open(Platform.isWindows ? 'myterm_ffi.dll' : 'libmyterm_ffi.so'),
+    );
     _dir = await getApplicationSupportDirectory();
     if (await _metaFile.exists()) {
       _meta = jsonDecode(await _metaFile.readAsString()) as Map<String, dynamic>;
