@@ -234,7 +234,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
       body: SafeArea(
         child: ListenableBuilder(
           listenable: Listenable.merge([s, widget.state]),
-          builder: (context, _) => Column(children: [
+          builder: (context, _) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             if (s.status.isNotEmpty)
               MaterialBanner(
                 content: Text(s.status),
@@ -244,54 +244,20 @@ class _TerminalScreenState extends State<TerminalScreen> {
                 ],
               ),
             Expanded(
-              child: Stack(children: [
-                Positioned.fill(
-                  child: CallbackShortcuts(
-                    bindings: {
-                      const SingleActivator(LogicalKeyboardKey.equal, control: true): () => _zoom(1),
-                      const SingleActivator(LogicalKeyboardKey.numpadAdd, control: true): () => _zoom(1),
-                      const SingleActivator(LogicalKeyboardKey.minus, control: true): () => _zoom(-1),
-                      const SingleActivator(LogicalKeyboardKey.numpadSubtract, control: true): () => _zoom(-1),
-                      const SingleActivator(LogicalKeyboardKey.digit0, control: true): () => _zoom(0),
-                    },
-                    child: TerminalView(
-                      s.terminal,
-                      key: ObjectKey(s),
-                      controller: terminalController,
-                      autofocus: true,
-                      backgroundOpacity: 0,
-                      theme: TerminalThemes.defaultTheme,
-                      // The size setting is the only scale, so the grid is the
-                      // same whatever the OS text-size setting is.
-                      textStyle: terminalStyle(widget.state.terminalFontSize),
-                      textScaler: TextScaler.noScaling,
-                    ),
-                  ),
-                ),
-                // Long-press selects text; then offer Copy.
-                ListenableBuilder(
-                  listenable: terminalController,
-                  builder: (context, _) => terminalController.selection == null
-                      ? const SizedBox.shrink()
-                      : Positioned(
-                          top: 8,
-                          right: 8,
-                          child: Row(mainAxisSize: MainAxisSize.min, children: [
-                            FilledButton.tonalIcon(
-                              onPressed: _copySelection,
-                              icon: const Icon(Icons.copy, size: 18),
-                              label: const Text('Copy'),
-                            ),
-                            const SizedBox(width: 4),
-                            IconButton.filledTonal(
-                              tooltip: 'Clear selection',
-                              onPressed: terminalController.clearSelection,
-                              icon: const Icon(Icons.close, size: 18),
-                            ),
-                          ]),
-                        ),
-                ),
-              ]),
+              child: TerminalPane(
+                terminal: s.terminal,
+                key: ObjectKey(s),
+                controller: terminalController,
+                style: terminalStyle(widget.state.terminalFontSize),
+                shortcuts: {
+                  const SingleActivator(LogicalKeyboardKey.equal, control: true): () => _zoom(1),
+                  const SingleActivator(LogicalKeyboardKey.numpadAdd, control: true): () => _zoom(1),
+                  const SingleActivator(LogicalKeyboardKey.minus, control: true): () => _zoom(-1),
+                  const SingleActivator(LogicalKeyboardKey.numpadSubtract, control: true): () => _zoom(-1),
+                  const SingleActivator(LogicalKeyboardKey.digit0, control: true): () => _zoom(0),
+                },
+                onCopy: _copySelection,
+              ),
             ),
             SuggestionBar(suggestions: s.suggestions, onAccept: s.accept),
             _SessionTabs(
@@ -539,5 +505,70 @@ class TextSizeControl extends StatelessWidget {
         ]);
       },
     );
+  }
+}
+
+/// The terminal itself plus the Copy button shown while text is selected.
+/// Fills all the space it is given (integration_test/terminal_layout_test.dart).
+class TerminalPane extends StatelessWidget {
+  const TerminalPane({
+    super.key,
+    required this.terminal,
+    required this.controller,
+    required this.style,
+    this.shortcuts = const {},
+    this.onCopy,
+  });
+
+  final Terminal terminal;
+  final TerminalController controller;
+  final TerminalStyle style;
+  final Map<ShortcutActivator, VoidCallback> shortcuts;
+  final VoidCallback? onCopy;
+
+  @override
+  Widget build(BuildContext context) {
+    // StackFit.expand: the Stack takes the full size it is offered. With the
+    // default (loose) fit it sized itself to its one unpositioned child, an
+    // empty 0x0 placeholder, so on Windows the terminal got zero width and
+    // drew a single centred column.
+    return Stack(fit: StackFit.expand, children: [
+      CallbackShortcuts(
+        bindings: shortcuts,
+        child: TerminalView(
+          terminal,
+          controller: controller,
+          autofocus: true,
+          backgroundOpacity: 0,
+          theme: TerminalThemes.defaultTheme,
+          textStyle: style,
+          // The size setting is the only scale, whatever the OS text size is.
+          textScaler: TextScaler.noScaling,
+        ),
+      ),
+      // Long-press (or drag) selects text; then offer Copy.
+      Positioned(
+        top: 8,
+        right: 8,
+        child: ListenableBuilder(
+          listenable: controller,
+          builder: (context, _) => controller.selection == null
+              ? const SizedBox.shrink()
+              : Row(mainAxisSize: MainAxisSize.min, children: [
+                  FilledButton.tonalIcon(
+                    onPressed: onCopy,
+                    icon: const Icon(Icons.copy, size: 18),
+                    label: const Text('Copy'),
+                  ),
+                  const SizedBox(width: 4),
+                  IconButton.filledTonal(
+                    tooltip: 'Clear selection',
+                    onPressed: controller.clearSelection,
+                    icon: const Icon(Icons.close, size: 18),
+                  ),
+                ]),
+        ),
+      ),
+    ]);
   }
 }

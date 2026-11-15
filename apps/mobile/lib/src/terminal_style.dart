@@ -7,13 +7,8 @@ const double minTerminalFontSize = 8;
 const double maxTerminalFontSize = 32;
 double get defaultTerminalFontSize => Platform.isWindows ? 14 : 13;
 
-/// The terminal's font.
-///
-/// xterm's default puts the generic name 'monospace' first. Android maps that
-/// to a real font; Windows has no font of that name, and there the grid
-/// collapsed to one column. Name fonts every Windows 10/11 install has.
-/// integration_test/terminal_layout_test.dart checks the column count on a
-/// real Windows build in CI.
+/// The terminal's font. On Windows, name fonts every Windows 10/11 install
+/// has (Cascadia Mono, then Consolas) rather than xterm's generic default.
 TerminalStyle terminalStyle(double fontSize) {
   if (Platform.isWindows) {
     return TerminalStyle(

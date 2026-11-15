@@ -29,18 +29,50 @@ class _HostsScreenState extends State<HostsScreen> {
     setState(() {});
   }
 
+  // A pushed route: the home shell's rebuilds don't reach it, so listen
+  // here, or hosts arriving by sync only showed after leaving and coming back.
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => ListenableBuilder(
+        listenable: Listenable.merge([widget.state, widget.state.sync]),
+        builder: (context, _) => _build(context),
+      );
+
+  Widget _build(BuildContext context) {
     final hosts = widget.state.core
         .listHosts()
         .where((h) =>
             _query.isEmpty ||
             '${h.label} ${h.address} ${h.tags.join(' ')}'.toLowerCase().contains(_query.toLowerCase()))
         .toList();
+    final sync = widget.state.sync;
     return Scaffold(
-      appBar: AppBar(title: const Text('Hosts')),
+      appBar: AppBar(title: const Text('Hosts'), actions: [
+        if (sync.configured)
+          IconButton(
+            tooltip: 'Sync now',
+            onPressed: sync.running ? null : sync.syncNow,
+            icon: sync.running
+                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                : Icon(sync.lastError == null ? Icons.sync : Icons.sync_problem,
+                    color: sync.lastError == null ? null : Colors.orange),
+          ),
+      ]),
       floatingActionButton: FloatingActionButton(onPressed: _edit, child: const Icon(Icons.add)),
       body: Column(children: [
+        if (!sync.configured)
+          const ListTile(
+            dense: true,
+            leading: Icon(Icons.sync_disabled, color: Colors.orange),
+            title: Text('Sync is not set up on this device'),
+            subtitle: Text('Hosts stay on this device until you join your vault: Settings → Sync'),
+          )
+        else if (sync.lastError != null)
+          ListTile(
+            dense: true,
+            leading: const Icon(Icons.sync_problem, color: Colors.orange),
+            title: const Text('Sync failed'),
+            subtitle: Text(sync.lastError!),
+          ),
         Padding(
           padding: const EdgeInsets.all(12),
           child: TextField(
@@ -49,7 +81,10 @@ class _HostsScreenState extends State<HostsScreen> {
           ),
         ),
         Expanded(
-          child: ListView.builder(
+          child: RefreshIndicator(
+            onRefresh: sync.configured ? sync.syncNow : () async {},
+            child: ListView.builder(
+            physics: const AlwaysScrollableScrollPhysics(),
             itemCount: hosts.length,
             itemBuilder: (context, i) {
               final h = hosts[i];
@@ -71,6 +106,7 @@ class _HostsScreenState extends State<HostsScreen> {
                 ),
               );
             },
+          ),
           ),
         ),
       ]),
