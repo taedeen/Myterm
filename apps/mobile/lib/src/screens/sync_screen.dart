@@ -47,7 +47,8 @@ class SyncCard extends StatelessWidget {
                 if (sync.running) 'Syncing…' else if (last != null) 'Last synced ${_ago(last)}' else 'Not synced yet',
                 if (sync.lastResult != null) sync.lastResult!,
                 if (sync.lastError != null) sync.lastError!,
-                'This device: ${state.deviceId.substring(0, 8)}',
+                // Devices sync with each other only if these vault ids match.
+                'Vault id ${state.core.syncIdentity().vaultId.substring(0, 8)} · this device ${state.deviceId.substring(0, 8)}',
               ].join('\n')),
               isThreeLine: true,
             ),
