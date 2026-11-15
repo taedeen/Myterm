@@ -100,23 +100,25 @@ class _TerminalScreenState extends State<TerminalScreen> {
   /// Off → side by side → top and bottom → off. The second pane shows
   /// another open session, or a new one to the same host if there is none.
   void _cycleSplit() {
+    // Read the current session before touching _panes: `s` reads _panes,
+    // and reading it after clear() threw, leaving the screen with no panes.
+    final current = s;
     setState(() {
       switch (_split) {
         case null:
-          final other = widget.state.sessions.where((x) => !identical(x, s)).firstOrNull ??
-              widget.state.openSession(s.host);
+          final other = widget.state.sessions.where((x) => !identical(x, current)).firstOrNull ??
+              widget.state.openSession(current.host);
           _panes
             ..clear()
-            ..addAll([s, other]);
+            ..addAll([current, other]);
           _focused = 1;
           _split = Axis.horizontal;
         case Axis.horizontal:
           _split = Axis.vertical;
         case Axis.vertical:
-          final keep = s;
           _panes
             ..clear()
-            ..add(keep);
+            ..add(current);
           _focused = 0;
           _split = null;
       }
