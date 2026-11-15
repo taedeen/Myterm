@@ -82,7 +82,8 @@ version_of() {  # version from `version = path:regex` (first capture group), els
   if [ -n "$spec" ]; then
     file="${spec%%:*}"; re="${spec#*:}"
     if [ -f "$(app_dir "$app")/$file" ]; then
-      sed -nE "s/^${re}\$/\\1/p" "$(app_dir "$app")/$file" | head -n 1
+      local v; v="$(sed -nE "s/^${re}\$/\\1/p" "$(app_dir "$app")/$file")"
+      printf '%s' "${v%%$'\n'*}"
       return
     fi
   fi
@@ -130,7 +131,8 @@ health() {      # health APP VERSION SINCE -> 0 when healthy (waits up to `healt
     case "$kind" in
       http)  curl -fsS -m 5 -k "$rest" >/dev/null 2>&1 && return 0 ;;
       log)   svc="${rest%%:*}"; pat="${rest#*:}"; pat="${pat//\{version\}/$ver}"
-             compose "$app" logs --since "$since" "$svc" 2>/dev/null | grep -qF -- "$pat" && return 0 ;;
+             # Capture first: `logs | grep -q` fails under pipefail when grep stops early.
+             [[ "$(compose "$app" logs --no-color --since "$since" "$svc" 2>/dev/null || true)" == *"$pat"* ]] && return 0 ;;
       container) # container:NAME -> Docker's own healthcheck says healthy
              [ "$($SUDO docker inspect -f '{{.State.Health.Status}}' "$rest" 2>/dev/null)" = healthy ] && return 0 ;;
       *)     die "[$app] health must be http:URL, log:SERVICE:TEXT or container:NAME (got '$spec')" ;;
@@ -200,6 +202,13 @@ upgrade_app() {
 }
 
 # ------------------------------------------------------------------ first install
+# `ssh -T` to GitHub always exits 1 (no shell access), even when the key works, so
+# read its reply instead of its exit status (with pipefail, `ssh | grep` would fail).
+github_reply() {
+  ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -T "$1" 2>&1 | tail -n 1 || true
+}
+github_ok() { [[ "$(github_reply "$1")" == *"successfully authenticated"* ]]; }
+
 setup_app() {
   local app="$1" dir remote br sub repo key alias since
   dir="$(app_dir "$app")"; remote="$(need "$app" remote)"; br="$(branch "$app")"; sub="$(get "$app" subdir)"
@@ -220,13 +229,12 @@ setup_app() {
           "$alias" "$key" >> "$HOME/.ssh/config"
         chmod 600 "$HOME/.ssh/config"
       fi
-      if ! ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -T "$alias" 2>&1 | grep -q "successfully authenticated"; then
+      if ! github_ok "$alias"; then
         bold "Add this read-only deploy key to $repo:"
         note "https://github.com/$repo/settings/keys/new   (leave 'Allow write access' unticked)"
         echo; cat "$key.pub"; echo
         read -r -p "Press Enter once it's added… " _
-        ssh -o BatchMode=yes -T "$alias" 2>&1 | grep -q "successfully authenticated" \
-          || die "GitHub still refuses the key. Check it was added to $repo."
+        github_ok "$alias" || die "GitHub still refuses the key ($(github_reply "$alias")). Check it was added to $repo."
       fi
     fi
   fi
