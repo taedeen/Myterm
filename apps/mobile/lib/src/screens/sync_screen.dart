@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
+import '../sync_service.dart';
 
 /// Settings card: sync status, or the way into setup.
 class SyncCard extends StatelessWidget {
@@ -95,7 +96,7 @@ class SyncSetupScreen extends StatefulWidget {
 }
 
 class _SyncSetupScreenState extends State<SyncSetupScreen> {
-  final _url = TextEditingController(text: 'http://');
+  final _url = TextEditingController(text: SyncService.defaultUrl);
   final _token = TextEditingController();
   final _name = TextEditingController();
   final _password = TextEditingController();
@@ -165,7 +166,7 @@ class _SyncSetupScreenState extends State<SyncSetupScreen> {
           controller: _url,
           keyboardType: TextInputType.url,
           autocorrect: false,
-          decoration: dec('Server address', 'For example http://192.0.2.17:7341'),
+          decoration: dec('Server address', 'Default ${SyncService.defaultUrl}'),
         ),
         const SizedBox(height: 12),
         TextField(
