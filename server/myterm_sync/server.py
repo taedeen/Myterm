@@ -221,12 +221,21 @@ def validate_wrapped(w: object) -> dict:
 
 
 class App:
-    def __init__(self, store: Store, server_token: str, limiter: RateLimiter | None = None):
+    def __init__(
+        self,
+        store: Store,
+        server_token: str,
+        limiter: RateLimiter | None = None,
+        trust_proxy: bool = False,
+    ):
         if len(server_token) < 24:
             raise ValueError("server token must be at least 24 characters")
         self.store = store
         self.server_token_hash = sha256_hex(server_token)
         self.limiter = limiter or RateLimiter()
+        # Behind a reverse proxy every request comes from the proxy; trust its
+        # X-Forwarded-For only when told to, or clients could spoof it.
+        self.trust_proxy = trust_proxy
 
     # ---- auth
 
@@ -249,7 +258,7 @@ class App:
             raise ApiError(HTTPStatus.UNAUTHORIZED, "vault token rejected")
 
     def limit(self, h: "Handler") -> None:
-        if not self.limiter.allow(h.client_address[0]):
+        if not self.limiter.allow(h.client_ip()):
             raise ApiError(HTTPStatus.TOO_MANY_REQUESTS, "too many attempts, slow down")
 
     # ---- routing
@@ -342,6 +351,13 @@ class Handler(BaseHTTPRequestHandler):
 
     _raw: bytes = b""
 
+    def client_ip(self) -> str:
+        if self.app.trust_proxy:
+            fwd = self.headers.get("X-Forwarded-For", "")
+            if fwd:
+                return fwd.split(",")[0].strip()
+        return self.client_address[0]
+
     def _read_body(self) -> None:
         """Reads the whole body up front, so a request rejected early (bad
         auth, validation) never leaves unread bytes on a kept-alive connection."""
@@ -398,7 +414,7 @@ class Handler(BaseHTTPRequestHandler):
         # Method, path without query string, and status only. No tokens, no bodies.
         if len(args) >= 2 and isinstance(args[0], str):
             line = args[0].split("?")[0]
-            log.info("%s %s %s", self.client_address[0], line, args[1])
+            log.info("%s %s %s", self.client_ip(), line, args[1])
 
 
 def make_server(app: App, host: str, port: int, tls_cert: str | None = None, tls_key: str | None = None):
@@ -427,7 +443,8 @@ def main() -> None:
     if len(token) < 24:
         raise SystemExit("Set MYTERM_SYNC_TOKEN to a random string of at least 24 characters "
                          "(e.g. `openssl rand -hex 24`).")
-    app = App(Store(args.db), token)
+    trust_proxy = os.environ.get("MYTERM_SYNC_TRUST_PROXY", "").lower() in ("1", "true", "yes")
+    app = App(Store(args.db), token, trust_proxy=trust_proxy)
     httpd = make_server(app, args.host, args.port, args.tls_cert, args.tls_key)
     scheme = "https" if args.tls_cert else "http"
     log.info("MyTerm sync listening on %s://%s:%d (db %s)", scheme, args.host, args.port, args.db)

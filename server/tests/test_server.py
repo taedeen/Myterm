@@ -177,6 +177,23 @@ class ServerTest(unittest.TestCase):
         c.close()
         self.assertEqual(self.req("GET", "/nope")[0], 404)
 
+    def test_rate_limit_per_forwarded_client_when_trusting_proxy(self):
+        app = self.httpd.RequestHandlerClass.app
+        app.limiter = RateLimiter(limit=2)
+        app.trust_proxy = True
+        self.create()
+
+        def bad(ip):
+            c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+            c.request("GET", f"/v1/vaults/{VAULT_ID}/records", headers={"X-MyTerm-Vault-Token": "x", "X-Forwarded-For": ip})
+            r = c.getresponse()
+            r.read()
+            c.close()
+            return r.status
+
+        self.assertEqual([bad("10.0.0.1") for _ in range(3)], [401, 401, 429])
+        self.assertEqual(bad("10.0.0.2"), 401, "a different client has its own budget")
+
     def test_short_server_token_refused(self):
         with self.assertRaises(ValueError):
             App(Store(":memory:"), "short")

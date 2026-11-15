@@ -8,9 +8,14 @@ services:
     container_name: myterm-sync
     restart: unless-stopped
     ports:
+      # Behind a reverse proxy on this host, publish on localhost only:
+      # - "127.0.0.1:7341:7341"
       - "7341:7341"
     environment:
       MYTERM_SYNC_TOKEN: ${MYTERM_SYNC_TOKEN:?set MYTERM_SYNC_TOKEN in .env}
+      # Behind a reverse proxy: rate-limit and log by the client's real IP.
+      # Only enable when the port isn't reachable except through the proxy.
+      MYTERM_SYNC_TRUST_PROXY: "true"
       # Optional TLS: mount a cert and key and uncomment.
       # MYTERM_SYNC_TLS_CERT: /certs/cert.pem
       # MYTERM_SYNC_TLS_KEY: /certs/key.pem

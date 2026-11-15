@@ -43,15 +43,19 @@ class SyncService extends ChangeNotifier {
     return t == null ? null : DateTime.fromMillisecondsSinceEpoch(t);
   }
 
+  /// Default server: the MyTerm sync server behind the home reverse proxy.
+  static const defaultUrl = 'https://myterm.local.taedeen.com';
+
   static String normaliseUrl(String raw) {
     var u = raw.trim();
-    if (!u.contains('://')) u = 'http://$u';
+    if (u.isEmpty) u = defaultUrl;
+    if (!u.contains('://')) u = 'https://$u';
     while (u.endsWith('/')) {
       u = u.substring(0, u.length - 1);
     }
     final parsed = Uri.tryParse(u);
     if (parsed == null || !(parsed.scheme == 'http' || parsed.scheme == 'https') || parsed.host.isEmpty) {
-      throw SyncError('Enter a server address like http://192.168.0.17:7341');
+      throw SyncError('Enter a server address like $defaultUrl');
     }
     return u;
   }
@@ -95,7 +99,7 @@ class SyncService extends ChangeNotifier {
     } on SocketException catch (e) {
       throw SyncError("Can't reach the sync server: ${e.osError?.message ?? e.message}");
     } on HandshakeException {
-      throw SyncError('TLS handshake failed. Check the certificate, or use http:// on your home network.');
+      throw SyncError("TLS handshake failed: the server's certificate isn't trusted by this device. Check the proxy's certificate.");
     } on TimeoutException {
       throw SyncError('The sync server took too long to answer.');
     } finally {

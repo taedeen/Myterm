@@ -24,8 +24,9 @@ Without Docker: `MYTERM_SYNC_TOKEN=... MYTERM_SYNC_DB=./data/sync.db python -m m
 
 ## Connect your devices
 
-1. **First device:** Settings → Sync → *New sync vault*. Enter the server
-   address (`http://192.168.0.17:7341`), the server token and a vault name.
+1. **First device:** Settings → Sync → *New sync vault*. The server address
+   defaults to `https://myterm.local.taedeen.com` (the reverse proxy in front
+   of this container); enter the server token and a vault name.
 2. **Every other device:** Settings → Sync → *Join existing*. Same address,
    token and vault name, plus the **master password of the first device's
    vault**. The joining device's own hosts and credentials are kept and merged
@@ -77,6 +78,13 @@ Server token: `Authorization: Bearer …`. Vault token: `X-MyTerm-Vault-Token: �
 
 ## Security notes
 
+- **Behind a reverse proxy:** point it at `http://<host>:7341`. The
+  container needs no TLS of its own. If the proxy runs on the same host, you
+  can publish the port on localhost only (`"127.0.0.1:7341:7341"` in
+  `docker-compose.yml`) so nothing bypasses the proxy.
+  `MYTERM_SYNC_TRUST_PROXY=true` (on in the compose file) makes rate limits
+  and logs use the client IP from `X-Forwarded-For`; turn it off if clients
+  can reach port 7341 directly, since they could forge that header.
 - **Use TLS beyond your LAN.** Plain http is fine on a home network because
   records are end-to-end encrypted, but the tokens travel in the clear. For
   anything internet-facing, put it behind a reverse proxy with a real
