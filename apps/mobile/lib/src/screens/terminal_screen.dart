@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io' show Platform;
 import 'dart:typed_data';
 
+import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:xterm/xterm.dart';
@@ -131,6 +132,13 @@ class _TerminalScreenState extends State<TerminalScreen> {
     final focused = i == _focused;
     final pane = Listener(
       onPointerDown: (_) => _focusPane(i),
+      // Windows: selecting text with the mouse copies it on release (the
+      // highlight stays until the next click), like PuTTY.
+      onPointerUp: (e) {
+        if (Platform.isWindows && e.kind == PointerDeviceKind.mouse && _controllers[i].selection != null) {
+          _copySelection(clear: false);
+        }
+      },
       child: TerminalPane(
         terminal: _panes[i].terminal,
         key: ObjectKey(_panes[i]),
@@ -141,6 +149,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
         onZoom: _zoom,
         onKey: _suggestionKey,
         onCopy: _copySelection,
+        // Windows: right-click pastes.
+        onRightClick: Platform.isWindows ? _paste : null,
       ),
     );
     if (_split == null) return pane;
@@ -256,11 +266,11 @@ class _TerminalScreenState extends State<TerminalScreen> {
     );
   }
 
-  Future<void> _copySelection() async {
+  Future<void> _copySelection({bool clear = true}) async {
     final sel = terminalController.selection;
     if (sel == null) return;
     final text = s.terminal.buffer.getText(sel).trimRight();
-    terminalController.clearSelection();
+    if (clear) terminalController.clearSelection();
     if (text.isEmpty) return;
     await Clipboard.setData(ClipboardData(text: text));
     _toast('Copied ${text.length} characters');
@@ -662,6 +672,7 @@ class TerminalPane extends StatelessWidget {
     this.onCopy,
     this.autofocus = true,
     this.focusNode,
+    this.onRightClick,
   });
 
   final Terminal terminal;
@@ -675,6 +686,7 @@ class TerminalPane extends StatelessWidget {
   final VoidCallback? onCopy;
   final bool autofocus;
   final FocusNode? focusNode;
+  final VoidCallback? onRightClick;
 
   /// Handles the zoom keys before the terminal sees them.
   KeyEventResult _zoomKey(KeyEvent event) {
@@ -703,6 +715,7 @@ class TerminalPane extends StatelessWidget {
           controller: controller,
           autofocus: autofocus,
           focusNode: focusNode,
+          onSecondaryTapDown: onRightClick == null ? null : (_, __) => onRightClick!(),
           backgroundOpacity: 0,
           theme: TerminalThemes.defaultTheme,
           textStyle: style,
