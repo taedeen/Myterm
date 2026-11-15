@@ -20,6 +20,7 @@ use myterm_core::keybar::{self, KeyAction};
 use myterm_core::knownhosts::{KnownHost, Verdict};
 use myterm_core::model::{self, Group, Host, Overrides};
 use myterm_core::session::Session;
+use myterm_core::sha256;
 use myterm_core::signer::Protection;
 use myterm_core::sshkey;
 use myterm_ssh::{self as ssh, AsyncDerSigner, Auth, ConnectOptions, Event, HostKeyPrompt, ShellHandle, Target};
@@ -182,6 +183,8 @@ const K_HOST: &str = "host";
 const K_GROUP: &str = "group";
 const K_CRED: &str = "credential";
 const K_SNIPPET: &str = "snippet";
+/// Trusted host keys. Synced, so a key trusted on one device is trusted on all.
+const K_KNOWN: &str = "known_host";
 
 fn s(v: &[u8]) -> String {
     String::from_utf8_lossy(v).into_owned()
@@ -210,6 +213,51 @@ fn bool_str(v: Option<bool>) -> &'static str {
 impl State {
     fn field(&self, id: &str, f: &str) -> String {
         self.vault.get(id, f).map(|v| s(&v)).unwrap_or_default()
+    }
+
+    /// Saves a trusted host key to the vault (one record per host + key type).
+    fn put_known_host(&mut self, k: &KnownHost) -> anyhow::Result<()> {
+        let id = format!("kh-{}", sha256::hex(&sha256::digest(format!("{}\0{}", k.pattern, k.key_type).as_bytes())));
+        let t = now();
+        for (name, value) in [
+            ("pattern", k.pattern.as_bytes()),
+            ("key_type", k.key_type.as_bytes()),
+            ("key_blob", k.key_blob.as_slice()),
+            ("approved_at", k.approved_at.to_string().as_bytes()),
+            ("approved_by_device", k.approved_by_device.as_bytes()),
+        ] {
+            self.vault.put(K_KNOWN, &id, name, value, t)?;
+        }
+        Ok(())
+    }
+
+    /// Rebuilds the in-memory trusted-key list from the vault. Needs the vault
+    /// unlocked; does nothing (keeps the current list) while locked.
+    fn load_known_hosts(&mut self) {
+        if !self.vault.is_unlocked() {
+            return;
+        }
+        let mut list: Vec<KnownHost> = Vec::new();
+        for id in self.ids_of(K_KNOWN) {
+            let Ok(blob) = self.vault.get(&id, "key_blob") else { continue };
+            let k = KnownHost {
+                pattern: self.field(&id, "pattern"),
+                key_type: self.field(&id, "key_type"),
+                key_blob: blob.to_vec(),
+                approved_at: self.field(&id, "approved_at").parse().unwrap_or(0),
+                approved_by_device: self.field(&id, "approved_by_device"),
+            };
+            if !k.pattern.is_empty() {
+                list.push(k);
+            }
+        }
+        // Keys trusted this session but not yet saved stay trusted.
+        for k in std::mem::take(&mut self.known_hosts) {
+            if !list.iter().any(|x| x.pattern == k.pattern && x.key_type == k.key_type) {
+                list.push(k);
+            }
+        }
+        self.known_hosts = list;
     }
 
     fn ids_of(&self, kind: &str) -> Vec<String> {
@@ -432,8 +480,10 @@ impl MyTerm {
         let mk = vault::unwrap_master_key(&password_wrapped, &kek, "password")?;
         let mut st = self.st();
         st.vault.unlock(mk);
-        // History is sealed in the vault; load it as soon as it can be read.
+        // History and trusted host keys are sealed in the vault; load them
+        // as soon as they can be read.
         Self::load_history(&mut st);
+        st.load_known_hosts();
         Ok(())
     }
 
@@ -443,6 +493,7 @@ impl MyTerm {
         let mut st = self.st();
         st.vault.unlock(MasterKey::from_bytes(bytes));
         Self::load_history(&mut st);
+        st.load_known_hosts();
         Ok(())
     }
 
@@ -492,6 +543,7 @@ impl MyTerm {
         let mut st = self.st();
         st.vault.load(records);
         Self::load_history(&mut st);
+        st.load_known_hosts();
         Ok(())
     }
 
@@ -841,6 +893,11 @@ impl MyTerm {
             let mut st = self.st();
             for k in approved {
                 st.audit.append(now(), AuditKind::HostKeyApproved, Some(&final_host_id), None, &k.pattern);
+                // Persist, or the host is "unknown" again after a restart.
+                if let Err(e) = st.put_known_host(&k) {
+                    st.audit.append(now(), AuditKind::SettingChanged, Some(&final_host_id), None, &format!("could not save host key: {e}"));
+                }
+                st.known_hosts.retain(|x| !(x.pattern == k.pattern && x.key_type == k.key_type));
                 st.known_hosts.push(k);
             }
             st.audit.append(now(), AuditKind::Connect, Some(&final_host_id), None, "");
