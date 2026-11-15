@@ -69,6 +69,20 @@ class AppState extends ChangeNotifier {
   /// Sync with a MyTerm sync server (Settings → Sync).
   late final SyncService sync = SyncService(this);
 
+  /// This device's name in the sync device list (Settings → Sync → Devices).
+  String get deviceName => (_meta['deviceName'] as String?) ?? _defaultDeviceName;
+  String _defaultDeviceName = 'This device';
+  set deviceName(String v) {
+    final name = v.trim();
+    if (name.isEmpty) {
+      _meta.remove('deviceName');
+    } else {
+      _meta['deviceName'] = name;
+    }
+    _writeMeta();
+    notifyListeners();
+  }
+
   /// Device-local settings (meta.json). Holds no secrets in the clear.
   Map<String, dynamic> get meta => _meta;
   String get deviceId => _meta['deviceId'] as String;
@@ -127,6 +141,7 @@ class AppState extends ChangeNotifier {
       _meta = jsonDecode(await _metaFile.readAsString()) as Map<String, dynamic>;
     }
     _meta['deviceId'] ??= const Uuid().v4();
+    _defaultDeviceName = await Native.deviceModel();
     core = MyTerm(deviceId: _meta['deviceId'] as String);
     if (await _storeFile.exists()) {
       await core.importStore(store: await _storeFile.readAsBytes());

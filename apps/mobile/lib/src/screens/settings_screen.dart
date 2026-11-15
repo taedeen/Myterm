@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
+import '../version.dart';
 import 'sync_screen.dart';
 import 'terminal_screen.dart' show TextSizeControl;
 
@@ -81,7 +82,7 @@ class SettingsScreen extends StatelessWidget {
       ),
       const Padding(
         padding: EdgeInsets.all(24),
-        child: Text('MyTerm 0.1.0 · preview', style: TextStyle(color: Colors.white54)),
+        child: Text('MyTerm $appVersion', style: TextStyle(color: Colors.white54)),
       ),
     ]));
   }

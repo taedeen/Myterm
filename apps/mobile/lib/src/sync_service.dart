@@ -7,9 +7,10 @@ import 'package:flutter/foundation.dart';
 import 'app_state.dart';
 
 class SyncError implements Exception {
-  SyncError(this.message, [this.status]);
+  SyncError(this.message, [this.status, this.body = const {}]);
   final String message;
   final int? status;
+  final Map<String, dynamic> body;
   @override
   String toString() => message;
 }
@@ -38,6 +39,10 @@ class SyncService extends ChangeNotifier {
   String? lastError;
   /// What the last sync did, e.g. "Received 3 changes, sent 1".
   String? lastResult;
+
+  /// Another device revoked a device and moved the vault to a new key; this
+  /// device needs the master password to follow (see [followMove]).
+  bool get moved => _meta['syncMoved'] == true;
 
   Map<String, dynamic> get _meta => state.meta;
   bool get configured => _meta['syncUrl'] != null;
@@ -80,7 +85,13 @@ class SyncService extends ChangeNotifier {
       final req = await client.openUrl(method, Uri.parse('$base$path'));
       req.headers.set(HttpHeaders.acceptHeader, 'application/json');
       if (serverToken != null) req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $serverToken');
-      if (vaultToken != null) req.headers.set('X-MyTerm-Vault-Token', vaultToken);
+      if (vaultToken != null) {
+        req.headers.set('X-MyTerm-Vault-Token', vaultToken);
+        // For the vault's device list. Header values must be plain ASCII.
+        req.headers.set('X-MyTerm-Device', state.deviceId);
+        final name = state.deviceName.replaceAll(RegExp(r'[^\x20-\x7E]'), '').trim();
+        if (name.isNotEmpty) req.headers.set('X-MyTerm-Device-Name', name.length > 64 ? name.substring(0, 64) : name);
+      }
       if (body != null) {
         final bytes = utf8.encode(jsonEncode(body));
         req.headers.contentType = ContentType.json;
@@ -98,7 +109,7 @@ class SyncService extends ChangeNotifier {
         }
       }
       if (res.statusCode >= 300) {
-        throw SyncError(data['error'] as String? ?? 'HTTP ${res.statusCode}', res.statusCode);
+        throw SyncError(data['error'] as String? ?? 'HTTP ${res.statusCode}', res.statusCode, data);
       }
       return data;
     } on SocketException catch (e) {
@@ -180,7 +191,7 @@ class SyncService extends ChangeNotifier {
   /// Stops syncing on this device. Data stays on the device and the server.
   Future<void> disconnect() async {
     stop();
-    for (final k in ['syncUrl', 'syncVaultName', 'syncCursor', 'syncDigests', 'syncLastAt']) {
+    for (final k in ['syncUrl', 'syncVaultName', 'syncCursor', 'syncDigests', 'syncLastAt', 'syncMoved']) {
       _meta.remove(k);
     }
     lastError = null;
@@ -223,7 +234,7 @@ class SyncService extends ChangeNotifier {
 
   Future<void> syncNow() async {
     final base = url;
-    if (base == null || !state.unlocked) return;
+    if (base == null || !state.unlocked || moved) return;
     if (_running) {
       _again = true;
       return;
@@ -294,6 +305,13 @@ class SyncService extends ChangeNotifier {
         state.refresh();
       }
     } on SyncError catch (e) {
+      if (e.status == 410 && e.body['moved'] == true) {
+        _meta['syncMoved'] = true;
+        await state.writeMeta();
+        _failed('A device was revoked on another device, so your vault has a new key. '
+            'Enter your master password to keep syncing.');
+        return;
+      }
       _failed(e.status == 401
           ? 'The server rejected this vault. It may have been deleted or reset on the server: '
               'Disconnect, then set up sync again.'
@@ -321,6 +339,103 @@ class SyncService extends ChangeNotifier {
     lastResult = null;
   }
 
+  // ------------------------------------------------------------- devices
+
+  /// Devices that have synced with this vault, most recently seen first.
+  Future<List<SyncDevice>> devices() async {
+    final id = state.core.syncIdentity();
+    final r = await _http(url!, 'GET', '/v1/vaults/${id.vaultId}/devices', vaultToken: id.vaultToken);
+    return [for (final d in (r['devices'] as List).cast<Map<String, dynamic>>()) SyncDevice.fromJson(d)];
+  }
+
+  /// A retired device: removes its copies from the server. Your other
+  /// devices keep everything they already merged.
+  Future<void> forgetDevice(String deviceId) async {
+    final id = state.core.syncIdentity();
+    await _http(url!, 'DELETE', '/v1/vaults/${id.vaultId}/devices/$deviceId', vaultToken: id.vaultToken);
+  }
+
+  /// A lost or stolen device: makes a new master key (with [newPassword] if
+  /// given), moves the server's vault to it and re-encrypts this device.
+  /// Other devices follow with the master password; the lost one can't.
+  Future<void> revokeAndRekey({required String masterPassword, String? newPassword}) async {
+    final base = url!;
+    stop();
+    try {
+      final old = state.core.syncIdentity();
+      final m = _meta;
+      final rot = await state.core.prepareKeyRotation(
+        masterPassword: masterPassword,
+        newPassword: newPassword,
+        passwordWrapped: base64Decode(m['passwordWrapped'] as String),
+        kdfSalt: base64Decode(m['salt'] as String),
+        kdfMKib: m['m'] as int,
+        kdfT: m['t'] as int,
+        kdfP: m['p'] as int,
+      );
+      final wrapped = {
+        'password_wrapped': base64Encode(rot.passwordWrapped),
+        'kdf_salt': base64Encode(rot.kdfSalt),
+        'kdf_m_kib': rot.kdfMKib,
+        'kdf_t': rot.kdfT,
+        'kdf_p': rot.kdfP,
+      };
+      // Server first: if this fails nothing has changed here. If the app
+      // stops after it, this device follows the move like any other.
+      await _http(base, 'POST', '/v1/vaults/${old.vaultId}/successor', vaultToken: old.vaultToken, body: {
+        'vault_id': rot.vaultId,
+        'auth_hash': rot.authHash,
+        'wrapped': wrapped,
+      });
+      await state.core.applyKeyRotation(masterKey: rot.masterKey);
+      await state.adoptJoinedVault(rot.masterKey, wrapped); // wipes the key
+      _meta
+        ..['syncCursor'] = 0
+        ..remove('syncDigests')
+        ..remove('syncMoved');
+      await state.writeMeta();
+    } finally {
+      start();
+    }
+    await syncNow();
+  }
+
+  /// After another device revoked one: joins the vault's successor with the
+  /// master password (the current one, or the new one if it was changed).
+  Future<void> followMove(String masterPassword) async {
+    final base = url!;
+    final old = state.core.syncIdentity();
+    final found = await _http(base, 'GET', '/v1/vaults/${old.vaultId}/successor', vaultToken: old.vaultToken);
+    final w = found['wrapped'] as Map<String, dynamic>;
+    final Uint8List mk;
+    try {
+      mk = await state.core.joinVault(
+        masterPassword: masterPassword,
+        passwordWrapped: base64Decode(w['password_wrapped'] as String),
+        kdfSalt: base64Decode(w['kdf_salt'] as String),
+        kdfMKib: w['kdf_m_kib'] as int,
+        kdfT: w['kdf_t'] as int,
+        kdfP: w['kdf_p'] as int,
+        expectedVaultId: found['vault_id'] as String,
+      );
+    } catch (e) {
+      throw SyncError(e.toString().contains('wrong master password')
+          ? 'Wrong master password. If it was changed when the device was revoked, use the new one.'
+          : 'Could not continue: $e');
+    }
+    await state.adoptJoinedVault(mk, w);
+    _meta
+      ..['syncCursor'] = 0
+      ..remove('syncDigests')
+      ..remove('syncMoved')
+      ..['syncVaultName'] = found['name'] as String;
+    lastError = null;
+    await state.writeMeta();
+    start();
+    notifyListeners();
+    await syncNow();
+  }
+
   /// Forgets what was sent and received, then syncs everything again.
   Future<void> resyncAll() async {
     _meta
@@ -335,4 +450,21 @@ class SyncService extends ChangeNotifier {
     stop();
     super.dispose();
   }
+}
+
+/// One entry in the vault's device list.
+class SyncDevice {
+  SyncDevice({required this.id, required this.name, required this.firstSeen, required this.lastSeen, required this.records});
+  factory SyncDevice.fromJson(Map<String, dynamic> j) => SyncDevice(
+        id: j['device_id'] as String,
+        name: j['name'] as String,
+        firstSeen: DateTime.fromMillisecondsSinceEpoch((j['first_seen'] as int) * 1000),
+        lastSeen: DateTime.fromMillisecondsSinceEpoch((j['last_seen'] as int) * 1000),
+        records: j['records'] as int,
+      );
+  final String id;
+  final String name;
+  final DateTime firstSeen;
+  final DateTime lastSeen;
+  final int records;
 }

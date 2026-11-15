@@ -63,6 +63,14 @@ minute while unlocked. Settings shows the last sync and any error.
   device id; deletions are tombstones; history counters are per device), so
   two devices editing at once never overwrite each other. Merging is
   order-independent.
+- **Devices:** Settings → Sync → Devices lists what has synced. *Forget* a
+  retired device to remove its copies. For a **lost or stolen** device, use
+  *Revoke*: your device makes a new master key (optionally with a new master
+  password), re-encrypts everything, and moves the vault to a successor on the
+  server. The old vault's data is deleted and it only answers "moved". Your
+  other devices then ask for the master password once to follow it. The lost
+  device holds the old key only, and without the master password it can't
+  join the new vault. If the password may be known, set a new one when revoking.
 - **Never uploaded:** the audit log, each device's full local history (which
   includes hosts with history sync turned off), and credentials marked
   "This device only". Hardware-bound keys can't leave the device at all.
@@ -78,8 +86,14 @@ minute while unlocked. Settings shows the last sync and any error.
 | `GET /v1/vaults/{id}/records?since=&limit=` | vault token | Changes since a cursor: `{records, cursor, more}` |
 | `PUT /v1/vaults/{id}/wrapped` | vault token | Replace the wrapped MK (master password change) |
 | `DELETE /v1/vaults/{id}` | vault token | Delete the vault and all its records |
+| `GET /v1/vaults/{id}/devices` | vault token | Devices that have synced: `{devices: [{device_id, name, first_seen, last_seen, records}]}` |
+| `DELETE /v1/vaults/{id}/devices/{device}` | vault token | Forget a retired device and remove its copies |
+| `POST /v1/vaults/{id}/successor` | vault token | Revoke: move to `{vault_id, auth_hash, wrapped}` under a new MK |
+| `GET /v1/vaults/{id}/successor` | old vault token | After a move: `{vault_id, name, wrapped}` to rejoin with the master password |
 
 Server token: `Authorization: Bearer …`. Vault token: `X-MyTerm-Vault-Token: …`.
+Devices also send `X-MyTerm-Device` (id) and `X-MyTerm-Device-Name` for the
+device list. A moved vault answers everything else with `410 {"moved": true}`.
 
 ## Security notes
 

@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main, dev]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -82,20 +83,113 @@ jobs:
       - name: Terminal layout test (real Windows fonts)
         working-directory: apps/mobile
         run: flutter test integration_test/terminal_layout_test.dart -d windows --reporter expanded
-      - name: Smoke test (the exe starts and loads the Rust core)
+      - name: Signing certificate
+        # The real key comes from secrets (packaging/windows/New-MyTermSigningCert.ps1
+        # puts it there). Without them, builds are signed with a throwaway test
+        # certificate so the whole pipeline is still exercised; releases refuse those.
+        id: cert
+        shell: pwsh
+        env:
+          PFX_B64: ${{ secrets.WINDOWS_SIGN_PFX }}
+          PFX_PASSWORD: ${{ secrets.WINDOWS_SIGN_PASSWORD }}
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'signing'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          if ($env:PFX_B64) {
+            $pfx = Join-Path $dir 'myterm-codesign.pfx'
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:PFX_B64))
+            $password = $env:PFX_PASSWORD
+            $kind = 'release'
+          } else {
+            Write-Warning 'WINDOWS_SIGN_PFX is not set: signing with a throwaway test certificate.'
+            packaging/windows/New-MyTermSigningCert.ps1 -Ci -OutDir $dir
+            $pfx = Join-Path $dir 'myterm-codesign.pfx'
+            $password = Get-Content (Join-Path $dir 'password.txt') -Raw
+            $kind = 'test'
+          }
+          Write-Host "::add-mask::$password"
+          # Public certificates from the key's chain, for the release and for
+          # checking signatures on this runner.
+          $certs = New-Object Security.Cryptography.X509Certificates.X509Certificate2Collection
+          $certs.Import($pfx, $password, 'DefaultKeySet')
+          $pub = Join-Path $dir 'public'
+          New-Item -ItemType Directory -Force -Path $pub | Out-Null
+          foreach ($c in $certs) {
+            if ($c.HasPrivateKey) {
+              [IO.File]::WriteAllBytes((Join-Path $pub 'myterm-codesign.cer'), $c.Export('Cert'))
+              Import-Certificate -FilePath (Join-Path $pub 'myterm-codesign.cer') -CertStoreLocation Cert:\LocalMachine\TrustedPublisher | Out-Null
+            } else {
+              [IO.File]::WriteAllBytes((Join-Path $pub 'myterm-root.cer'), $c.Export('Cert'))
+              Import-Certificate -FilePath (Join-Path $pub 'myterm-root.cer') -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+            }
+          }
+          if (-not (Test-Path (Join-Path $pub 'myterm-root.cer'))) { throw 'The signing key has no root certificate in its chain' }
+          Copy-Item packaging/windows/Trust-MyTerm.ps1 $pub
+          "pfx=$pfx" >> $env:GITHUB_OUTPUT
+          "password=$password" >> $env:GITHUB_OUTPUT
+          "kind=$kind" >> $env:GITHUB_OUTPUT
+          "public=$pub" >> $env:GITHUB_OUTPUT
+      - name: Sign the app
         shell: pwsh
         run: |
-          $exe = "apps/mobile/build/windows/x64/runner/Release/MyTerm.exe"
-          $p = Start-Process $exe -PassThru
+          $out = 'apps/mobile/build/windows/x64/runner/Release'
+          # Everything that is ours or unsigned; Microsoft's runtime DLLs keep Microsoft's signature.
+          $files = Get-ChildItem $out -Recurse -Include *.exe, *.dll |
+            Where-Object { $_.Name -notmatch '^(msvcp|vcruntime|concrt)' } | ForEach-Object FullName
+          packaging/windows/Sign-Files.ps1 -Pfx '${{ steps.cert.outputs.pfx }}' -Password '${{ steps.cert.outputs.password }}' -Files $files
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y | Out-Null
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          $version = (Select-String -Path apps/mobile/pubspec.yaml -Pattern '^version:\s*([0-9.]+)').Matches[0].Groups[1].Value
+          $release = (Resolve-Path 'apps/mobile/build/windows/x64/runner/Release').Path
+          $signtool = (Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName -Descending | Select-Object -First 1).FullName
+          $sign = "`"$signtool`" sign /q /fd SHA256 /f `"${{ steps.cert.outputs.pfx }}`" /p ${{ steps.cert.outputs.password }} /tr http://timestamp.digicert.com /td SHA256 /d MyTerm `$f"
+          & $iscc /Q "/DAppVersion=$version" "/DSourceDir=$release" /DSIGN "/Smytermsign=$sign" packaging/windows/myterm.iss
+          if ($LASTEXITCODE) { throw "ISCC failed ($LASTEXITCODE)" }
+          "MYTERM_VERSION=$version" >> $env:GITHUB_ENV
+      - name: Check signatures, install, run, uninstall
+        shell: pwsh
+        run: |
+          $setup = "packaging/windows/output/MyTerm-$env:MYTERM_VERSION-setup.exe"
+          $exe = 'apps/mobile/build/windows/x64/runner/Release/MyTerm.exe'
+          foreach ($f in $setup, $exe, 'apps/mobile/build/windows/x64/runner/Release/myterm_ffi.dll') {
+            $s = Get-AuthenticodeSignature $f
+            Write-Host "$f : $($s.Status) $($s.SignerCertificate.Subject) timestamp: $($null -ne $s.TimeStamperCertificate)"
+            if ($s.Status -ne 'Valid' -or $s.SignerCertificate.Subject -notmatch 'CN=MyTerm') { throw "Bad signature on $f" }
+          }
+          $p = Start-Process $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -PassThru -Wait
+          if ($p.ExitCode) { throw "Installer exited with $($p.ExitCode)" }
+          $installed = Join-Path $env:LOCALAPPDATA 'Programs\MyTerm'
+          if (-not (Test-Path "$installed\MyTerm.exe")) { throw 'MyTerm.exe was not installed' }
+          if ((Get-AuthenticodeSignature "$installed\unins000.exe").Status -ne 'Valid') { throw 'Uninstaller is not signed' }
+          $app = Start-Process "$installed\MyTerm.exe" -PassThru
           Start-Sleep -Seconds 15
-          if ($p.HasExited) { Write-Error "MyTerm.exe exited early with code $($p.ExitCode)"; exit 1 }
-          Stop-Process -Id $p.Id -Force
-          Write-Host "MyTerm.exe is running"
+          if ($app.HasExited) { throw "Installed MyTerm.exe exited early with code $($app.ExitCode)" }
+          Stop-Process -Id $app.Id -Force
+          $u = Start-Process "$installed\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES' -PassThru -Wait
+          # The uninstaller relaunches itself from %TEMP%, so wait for the files to go.
+          for ($i = 0; $i -lt 30 -and (Test-Path "$installed\MyTerm.exe"); $i++) { Start-Sleep -Seconds 1 }
+          if (Test-Path "$installed\MyTerm.exe") { throw 'Uninstall left MyTerm.exe behind' }
+          Write-Host 'Installer OK: signed, installs, runs, uninstalls.'
+      - name: Collect release files
+        shell: pwsh
+        run: |
+          $dist = 'dist'
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+          Copy-Item "packaging/windows/output/MyTerm-$env:MYTERM_VERSION-setup.exe" $dist
+          Compress-Archive -Path 'apps/mobile/build/windows/x64/runner/Release/*' -DestinationPath "$dist/MyTerm-$env:MYTERM_VERSION-windows-portable.zip"
+          Copy-Item '${{ steps.cert.outputs.public }}/*' $dist
+          "${{ steps.cert.outputs.kind }}" | Set-Content "$dist/signing-kind.txt" -NoNewline
+          Get-ChildItem $dist
       - uses: actions/upload-artifact@v4
         with:
           name: myterm-windows
-          path: apps/mobile/build/windows/x64/runner/Release/
+          path: dist/
           retention-days: 14
+    outputs:
+      signing: ${{ steps.cert.outputs.kind }}
 
   android:
     name: Android APK
@@ -118,6 +212,10 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-ndk,flutter_rust_bridge_codegen@2.11.1
+      - name: App version is the same everywhere
+        run: |
+          v="$(sed -n 's/^version: *\([0-9.]*\).*/\1/p' apps/mobile/pubspec.yaml)"
+          grep -q "appVersion = '$v'" apps/mobile/lib/src/version.dart || { echo "lib/src/version.dart doesn't say $v"; exit 1; }
       - name: Prepare Android build
         run: apps/mobile/tool/prepare_android.sh
       - name: Analyze Dart
@@ -142,3 +240,43 @@ jobs:
           name: myterm-android-apk
           path: apps/mobile/build/app/outputs/flutter-apk/app-release.apk
           retention-days: 14
+
+  release:
+    # Tag vX.Y.Z (matching pubspec.yaml's version) to publish a release.
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [core, crates, sync-server, windows, android]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the tag matches the app version
+        run: |
+          v="$(sed -n 's/^version: *\([0-9.]*\).*/\1/p' apps/mobile/pubspec.yaml)"
+          [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "Tag $GITHUB_REF_NAME doesn't match pubspec version $v"; exit 1; }
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+      - name: Releases must be signed with the real MyTerm key
+        if: needs.windows.outputs.signing != 'release'
+        run: |
+          echo "::error::WINDOWS_SIGN_PFX / WINDOWS_SIGN_PASSWORD aren't set: run packaging/windows/New-MyTermSigningCert.ps1 first."
+          exit 1
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Assemble
+        run: |
+          mkdir release
+          cp artifacts/myterm-android-apk/app-release.apk "release/MyTerm-$VERSION.apk"
+          cp artifacts/myterm-windows/MyTerm-*-setup.exe artifacts/myterm-windows/MyTerm-*-windows-portable.zip release/
+          cp artifacts/myterm-windows/myterm-root.cer artifacts/myterm-windows/myterm-codesign.cer artifacts/myterm-windows/Trust-MyTerm.ps1 release/
+          (cd release && sha256sum * > SHA256SUMS.txt)
+          ls -la release
+          # Notes: this version's section of CHANGELOG.md.
+          awk -v v="## $VERSION" '$0 ~ "^## " { if (p) exit; if (index($0, v) == 1) { p = 1; next } } p' CHANGELOG.md > notes.md
+          [ -s notes.md ] || { echo "CHANGELOG.md has no section for $VERSION"; exit 1; }
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" release/* --title "MyTerm $VERSION" --notes-file notes.md --verify-tag
+

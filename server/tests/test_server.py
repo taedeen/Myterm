@@ -45,9 +45,13 @@ class ServerTest(unittest.TestCase):
         self.httpd.shutdown()
         self.httpd.server_close()
 
-    def req(self, method, path, body=None, server=False, vault=None):
+    def req(self, method, path, body=None, server=False, vault=None, device=None, name=None):
         c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
         headers = {"Content-Type": "application/json"}
+        if device:
+            headers["X-MyTerm-Device"] = device
+        if name:
+            headers["X-MyTerm-Device-Name"] = name
         if server:
             headers["Authorization"] = f"Bearer {SERVER_TOKEN}"
         if vault is not None:
@@ -193,6 +197,74 @@ class ServerTest(unittest.TestCase):
 
         self.assertEqual([bad("10.0.0.1") for _ in range(3)], [401, 401, 429])
         self.assertEqual(bad("10.0.0.2"), 401, "a different client has its own budget")
+
+    def test_device_list_and_forget(self):
+        self.create()
+        v = f"/v1/vaults/{VAULT_ID}"
+        self.req("POST", f"{v}/records", {"device_id": "phone-1", "records": [{"key": key(1), "data": b64(b"a")}]},
+                 vault=VAULT_TOKEN, device="phone-1", name="Pixel 8")
+        self.req("GET", f"{v}/records?since=0", vault=VAULT_TOKEN, device="pc-1", name="DESKTOP\x07-PC")
+        status, body = self.req("GET", f"{v}/devices", vault=VAULT_TOKEN)
+        self.assertEqual(status, 200)
+        names = {d["device_id"]: (d["name"], d["records"]) for d in body["devices"]}
+        self.assertEqual(names, {"phone-1": ("Pixel 8", 1), "pc-1": ("DESKTOP-PC", 0)})
+        # A later request without a name keeps the stored one.
+        self.req("GET", f"{v}/records?since=0", vault=VAULT_TOKEN, device="phone-1")
+        _, body = self.req("GET", f"{v}/devices", vault=VAULT_TOKEN)
+        self.assertIn(("phone-1", "Pixel 8"), [(d["device_id"], d["name"]) for d in body["devices"]])
+
+        self.assertEqual(self.req("DELETE", f"{v}/devices/phone-1", vault=VAULT_TOKEN)[0], 200)
+        _, body = self.req("GET", f"{v}/devices", vault=VAULT_TOKEN)
+        self.assertEqual([d["device_id"] for d in body["devices"]], ["pc-1"])
+        self.assertEqual(self.pull()[1]["records"], [], "the forgotten device's records are gone")
+        self.assertEqual(self.req("DELETE", f"{v}/devices/phone-1", vault=VAULT_TOKEN)[0], 404)
+        self.assertEqual(self.req("GET", f"{v}/devices")[0], 401)
+
+    def test_revoke_moves_vault_to_successor(self):
+        self.create()
+        self.push("phone-1", [(key(1), b"old")])
+        new_token = "cd" * 32
+        new_id = "f" * 32
+        succ = {"vault_id": new_id, "auth_hash": hashlib.sha256(new_token.encode()).hexdigest(), "wrapped": WRAPPED}
+        self.assertEqual(self.req("POST", f"/v1/vaults/{VAULT_ID}/successor", succ)[0], 401, "needs the vault token")
+        self.assertEqual(self.req("GET", f"/v1/vaults/{VAULT_ID}/successor", vault=VAULT_TOKEN)[0], 404)
+        self.assertEqual(self.req("POST", f"/v1/vaults/{VAULT_ID}/successor", succ, vault=VAULT_TOKEN)[0], 201)
+
+        # The old vault: data gone, everything answers 410 except the pointer.
+        status, body = self.pull()
+        self.assertEqual((status, body.get("moved")), (410, True))
+        self.assertEqual(self.push("phone-1", [(key(2), b"x")])[0], 410)
+        status, body = self.req("GET", f"/v1/vaults/{VAULT_ID}/successor", vault=VAULT_TOKEN)
+        self.assertEqual((status, body["vault_id"], body["name"], body["wrapped"]), (200, new_id, "home", WRAPPED))
+        self.assertEqual(self.req("GET", f"/v1/vaults/{VAULT_ID}/successor", vault="00" * 32)[0], 401)
+
+        # The name now finds the successor, which works with its own token only.
+        status, body = self.req("GET", "/v1/vaults/lookup?name=home", server=True)
+        self.assertEqual((status, body["vault_id"]), (200, new_id))
+        self.assertEqual(self.req("GET", f"/v1/vaults/{new_id}/records?since=0", vault=VAULT_TOKEN)[0], 401)
+        status, body = self.req("GET", f"/v1/vaults/{new_id}/records?since=0", vault=new_token)
+        self.assertEqual((status, body["records"]), (200, []))
+
+        # Moving again (another revocation) keeps the first old vault pointing at the newest.
+        newer = {"vault_id": "e" * 32, "auth_hash": hashlib.sha256(("ef" * 32).encode()).hexdigest(), "wrapped": WRAPPED}
+        self.assertEqual(self.req("POST", f"/v1/vaults/{new_id}/successor", newer, vault=new_token)[0], 201)
+        _, body = self.req("GET", f"/v1/vaults/{VAULT_ID}/successor", vault=VAULT_TOKEN)
+        self.assertEqual(body["vault_id"], "e" * 32)
+
+    def test_old_database_gains_moved_to_column(self):
+        import sqlite3
+        import tempfile
+
+        path = os.path.join(tempfile.mkdtemp(), "old.db")
+        db = sqlite3.connect(path)
+        db.executescript(
+            "CREATE TABLE vaults (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, auth_hash TEXT NOT NULL,"
+            " wrapped TEXT NOT NULL, seq INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL);"
+        )
+        db.close()
+        store = Store(path)
+        cols = [r[1] for r in store.db.execute("PRAGMA table_info(vaults)")]
+        self.assertIn("moved_to", cols)
 
     def test_short_server_token_refused(self):
         with self.assertRaises(ValueError):

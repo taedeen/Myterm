@@ -83,6 +83,12 @@ class MainActivity : FlutterFragmentActivity() {
                         result.success(null)
                     }
 
+                    "deviceModel" -> {
+                        val maker = android.os.Build.MANUFACTURER.replaceFirstChar { it.uppercase() }
+                        val model = android.os.Build.MODEL
+                        result.success(if (model.startsWith(maker, ignoreCase = true)) model else "$maker $model")
+                    }
+
                     "keepAlive" -> {
                         SessionService.update(this, call.argument<Int>("sessions") ?: 0)
                         result.success(null)

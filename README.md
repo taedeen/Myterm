@@ -76,9 +76,20 @@ The app needs Android 11 (API 30) or later, for per-use Keystore authentication.
 
 ## Status
 
+Version 0.2.0 (see [CHANGELOG.md](CHANGELOG.md)).
+
 | Part | State |
 |---|---|
-| `myterm-core` | Built and tested: 56 unit tests and clippy pass with `-D warnings` |
-| `myterm-vault`, `myterm-ssh`, `myterm-ffi` | Written; first compile happens in CI |
-| Android app (Flutter + Kotlin) | Written; first build happens in CI |
-| Sync backend, remote-aware completion, FIDO2, Windows app | Not started (see roadmap in the design spec) |
+| `myterm-core`, `myterm-vault`, `myterm-ssh`, `myterm-ffi` | Built and tested in CI (tests + clippy `-D warnings`) |
+| Android app | Released: APK signed with the MyTerm key, installs over earlier builds |
+| Windows app | Released: signed installer + portable zip ([packaging/windows](packaging/windows/README.md)) |
+| Sync server | Released: Docker image, device list and revocation ([server](server/README.md)) |
+| Server tools | `deploy/`: upgrade.sh, bootstrap.sh, deploy-apk.sh |
+| Not yet | iOS, Linux desktop, TPM-backed SSH keys on Windows, FIDO2 keys |
+
+## Releasing
+
+Bump `version:` in `apps/mobile/pubspec.yaml` and `lib/src/version.dart`, add
+a section to `CHANGELOG.md`, merge to `main`, then tag `vX.Y.Z` and push the
+tag. CI builds everything, checks the Windows signatures, and publishes the
+GitHub release with the APK, installer, portable zip and certificates.
