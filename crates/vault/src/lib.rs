@@ -107,6 +107,16 @@ impl MasterKey {
         &self.0
     }
 
+    /// 32 bytes derived from MK for a named purpose (HKDF-SHA256). Used for
+    /// the sync vault id, the sync access token and sync record keys, so
+    /// every device holding MK derives the same values.
+    pub fn derive(&self, purpose: &str) -> Zeroizing<[u8; 32]> {
+        let hk = Hkdf::<Sha256>::new(Some(b"myterm-derive-v1"), self.0.as_ref());
+        let mut out = Zeroizing::new([0u8; 32]);
+        hk.expand(purpose.as_bytes(), out.as_mut()).expect("32 bytes is a valid HKDF-SHA256 output length");
+        out
+    }
+
     fn record_key(&self, kind: &str, id: &str) -> Zeroizing<[u8; 32]> {
         let hk = Hkdf::<Sha256>::new(Some(b"myterm-record-v1"), self.0.as_ref());
         let mut info = Vec::with_capacity(kind.len() + id.len() + 1);
@@ -211,6 +221,37 @@ impl Vault {
         self.mk.as_ref().ok_or(VaultError::Locked)
     }
 
+    /// See [`MasterKey::derive`].
+    pub fn derive(&self, purpose: &str) -> Result<Zeroizing<[u8; 32]>, VaultError> {
+        Ok(self.mk()?.derive(purpose))
+    }
+
+    /// Encrypts a whole blob (e.g. a record for upload) under MK.
+    pub fn seal_blob(&self, purpose: &str, plaintext: &[u8]) -> Result<Vec<u8>, VaultError> {
+        Ok(self.mk()?.seal("blob", purpose, "", plaintext))
+    }
+
+    pub fn open_blob(&self, purpose: &str, sealed: &[u8]) -> Result<Zeroizing<Vec<u8>>, VaultError> {
+        self.mk()?.open("blob", purpose, "", sealed)
+    }
+
+    /// Re-encrypts every record under `new` and switches to it. Used when this
+    /// device joins another device's vault, so its existing hosts and
+    /// credentials carry over. All-or-nothing: on error nothing changes.
+    pub fn rekey(&mut self, new: MasterKey) -> Result<(), VaultError> {
+        let old = self.mk()?;
+        let mut records = self.records.clone();
+        for r in records.values_mut() {
+            for (name, f) in r.fields.iter_mut() {
+                let plain = old.open(&r.kind, &r.id, name, &f.value)?;
+                f.value = new.seal(&r.kind, &r.id, name, &plain);
+            }
+        }
+        self.records = records;
+        self.mk = Some(new);
+        Ok(())
+    }
+
     pub fn put(&mut self, kind: &str, id: &str, field: &str, plaintext: &[u8], now: u64) -> Result<(), VaultError> {
         let sealed = self.mk()?.seal(kind, id, field, plaintext);
         let device = self.device_id.clone();
@@ -272,6 +313,122 @@ impl Vault {
         for r in records {
             self.records.insert(r.id.clone(), r);
         }
+    }
+}
+
+#[cfg(test)]
+mod sync_tests {
+    use super::*;
+    use myterm_core::codec;
+
+    /// What the app does on each sync: seal every outbound record.
+    fn collect(v: &Vault) -> Vec<Vec<u8>> {
+        v.outbound()
+            .into_iter()
+            .map(|r| v.seal_blob("sync-record", &codec::encode_records(std::iter::once(r))).unwrap())
+            .collect()
+    }
+
+    fn apply(v: &mut Vault, blobs: &[Vec<u8>]) {
+        for b in blobs {
+            let plain = v.open_blob("sync-record", b).unwrap();
+            for r in codec::decode_records(&plain).unwrap() {
+                v.merge_remote(&r);
+            }
+        }
+    }
+
+    #[test]
+    fn two_devices_join_and_converge() {
+        let password_kdf = KdfParams { m_cost_kib: 64, t_cost: 1, p_cost: 1, salt: [3; 16] };
+        // Phone creates the vault and some data.
+        let mk = MasterKey::generate();
+        let wrapped = wrap_master_key(&mk, &derive_password_key(b"correct horse", &password_kdf).unwrap(), "password");
+        let mut phone = Vault::new("phone");
+        phone.unlock(mk);
+        phone.put("host", "dbb", "address", b"192.168.0.17", 10).unwrap();
+        phone.put("credential", "pw", SECRET_FIELD, b"s3cret", 10).unwrap();
+        phone.put("audit", "audit-phone", "data", b"local only", 10).unwrap();
+        phone.set_device_only("audit-phone", true).unwrap();
+
+        // Desk already had its own vault with a host, then joins with the password.
+        let mut desk = Vault::new("desk");
+        desk.unlock(MasterKey::generate());
+        desk.put("host", "nas", "address", b"192.168.1.59", 5).unwrap();
+        let joined = unwrap_master_key(&wrapped, &derive_password_key(b"correct horse", &password_kdf).unwrap(), "password").unwrap();
+        assert_eq!(*joined.derive("sync-auth"), *phone.derive("sync-auth").unwrap(), "same vault token");
+        desk.rekey(joined).unwrap();
+
+        // Exchange.
+        let from_phone = collect(&phone);
+        assert_eq!(from_phone.len(), 2, "device-only audit not uploaded");
+        apply(&mut desk, &from_phone);
+        apply(&mut phone, &collect(&desk));
+
+        for v in [&phone, &desk] {
+            assert_eq!(&*v.get("dbb", "address").unwrap(), b"192.168.0.17");
+            assert_eq!(&*v.get("nas", "address").unwrap(), b"192.168.1.59", "desk's own host kept");
+            assert_eq!(v.secret("pw").unwrap().expose(), b"s3cret");
+        }
+
+        // Concurrent edits to different fields both survive; newer edit of the same field wins.
+        phone.put("host", "dbb", "label", b"dbb", 20).unwrap();
+        desk.put("host", "dbb", "address", b"192.168.0.18", 21).unwrap();
+        let (p, d) = (collect(&phone), collect(&desk));
+        apply(&mut desk, &p);
+        apply(&mut phone, &d);
+        for v in [&phone, &desk] {
+            assert_eq!(&*v.get("dbb", "label").unwrap(), b"dbb");
+            assert_eq!(&*v.get("dbb", "address").unwrap(), b"192.168.0.18");
+        }
+        assert!(desk.get("audit-phone", "data").is_err(), "audit never left the phone");
+
+        // A blob from a different vault is refused.
+        let mut stranger = Vault::new("x");
+        stranger.unlock(MasterKey::generate());
+        stranger.put("host", "evil", "address", b"1.2.3.4", 1).unwrap();
+        let bad = collect(&stranger);
+        assert!(desk.open_blob("sync-record", &bad[0]).is_err());
+    }
+
+    #[test]
+    fn derive_is_deterministic_per_key_and_purpose() {
+        let mk = MasterKey::from_bytes([7; 32]);
+        let same = MasterKey::from_bytes([7; 32]);
+        let other = MasterKey::from_bytes([8; 32]);
+        assert_eq!(*mk.derive("sync-auth"), *same.derive("sync-auth"));
+        assert_ne!(*mk.derive("sync-auth"), *mk.derive("sync-vault-id"));
+        assert_ne!(*mk.derive("sync-auth"), *other.derive("sync-auth"));
+    }
+
+    #[test]
+    fn blobs_roundtrip_and_bind_purpose() {
+        let mut v = Vault::new("phone");
+        v.unlock(MasterKey::generate());
+        let sealed = v.seal_blob("sync-record", b"hello").unwrap();
+        assert_eq!(&*v.open_blob("sync-record", &sealed).unwrap(), b"hello");
+        assert!(v.open_blob("other", &sealed).is_err());
+        v.lock();
+        assert!(matches!(v.seal_blob("x", b"y"), Err(VaultError::Locked)));
+    }
+
+    #[test]
+    fn rekey_keeps_data_readable_under_the_new_key_only() {
+        let mut v = Vault::new("phone");
+        v.unlock(MasterKey::from_bytes([1; 32]));
+        v.put("host", "h1", "address", b"192.168.0.17", 1).unwrap();
+        v.put("credential", "c1", SECRET_FIELD, b"hunter2", 1).unwrap();
+        let stamp_before = v.records().find(|r| r.id == "h1").unwrap().fields["address"].stamp.clone();
+
+        v.rekey(MasterKey::from_bytes([2; 32])).unwrap();
+        assert_eq!(&*v.get("h1", "address").unwrap(), b"192.168.0.17");
+        assert_eq!(v.secret("c1").unwrap().expose(), b"hunter2");
+        assert_eq!(v.records().find(|r| r.id == "h1").unwrap().fields["address"].stamp, stamp_before, "stamps kept");
+
+        let mut old = Vault::new("x");
+        old.load(v.records().cloned());
+        old.unlock(MasterKey::from_bytes([1; 32]));
+        assert!(old.get("h1", "address").is_err(), "old key no longer opens it");
     }
 }
 

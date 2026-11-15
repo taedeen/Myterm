@@ -10,6 +10,7 @@
          another phone anyway, and the vault syncs end-to-end encrypted. -->
     <application
         android:label="MyTerm"
+        android:usesCleartextTraffic="true"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="false"
