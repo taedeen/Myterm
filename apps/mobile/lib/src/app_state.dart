@@ -11,6 +11,7 @@ import 'package:uuid/uuid.dart';
 import 'native.dart';
 import 'rust/api.dart';
 import 'rust/frb_generated.dart';
+import 'sync_service.dart';
 import 'terminal_session.dart';
 
 /// Owns the Rust core, the on-disk store and vault unlock state.
@@ -35,6 +36,51 @@ class AppState extends ChangeNotifier {
   String get keybarProfileId => _keybarProfileId;
   set keybarProfileId(String id) {
     _keybarProfileId = id;
+    notifyListeners();
+  }
+
+  /// Sync with a MyTerm sync server (Settings → Sync).
+  late final SyncService sync = SyncService(this);
+
+  /// Device-local settings (meta.json). Holds no secrets in the clear.
+  Map<String, dynamic> get meta => _meta;
+  String get deviceId => _meta['deviceId'] as String;
+  Future<void> writeMeta() => _writeMeta();
+  void refresh() => notifyListeners();
+
+  /// The password-wrapped master key, as registered with the sync server so
+  /// another device can join with the master password.
+  Map<String, dynamic> wrappedForServer() => {
+        'password_wrapped': _meta['passwordWrapped'],
+        'kdf_salt': _meta['salt'],
+        'kdf_m_kib': _meta['m'],
+        'kdf_t': _meta['t'],
+        'kdf_p': _meta['p'],
+      };
+
+  /// After joining another device's vault: its master password now unlocks
+  /// this device too, and biometric unlock is re-armed with the new key.
+  Future<void> adoptJoinedVault(Uint8List mk, Map<String, dynamic> w) async {
+    _meta
+      ..['passwordWrapped'] = w['password_wrapped']
+      ..['salt'] = w['kdf_salt']
+      ..['m'] = w['kdf_m_kib']
+      ..['t'] = w['kdf_t']
+      ..['p'] = w['kdf_p'];
+    try {
+      final wrapped = await Native.deviceWrap(mk);
+      if (wrapped != null) {
+        _meta['deviceWrapped'] = base64Encode(wrapped);
+      } else {
+        _meta.remove('deviceWrapped');
+      }
+    } catch (_) {
+      _meta.remove('deviceWrapped');
+    } finally {
+      wipe(mk);
+    }
+    await _writeMeta();
+    await save(syncAfter: false);
     notifyListeners();
   }
 
@@ -73,13 +119,19 @@ class AppState extends ChangeNotifier {
     _saveTimer = Timer(const Duration(seconds: 3), save);
   }
 
-  Future<void> save() async {
+  Future<void> save({bool syncAfter = true}) async {
     _saveTimer?.cancel();
     if (!unlocked) return;
     final blobs = await core.exportStore();
     final tmp = File('${_storeFile.path}.tmp');
     await tmp.writeAsBytes(blobs.store, flush: true);
     await tmp.rename(_storeFile.path);
+    if (syncAfter) sync.soon();
+  }
+
+  void _unlocked() {
+    sync.start();
+    sync.soon();
   }
 
   /// First run. Returns false if biometric unlock could not be set up
@@ -105,6 +157,7 @@ class AppState extends ChangeNotifier {
     await _writeMeta();
     await save();
     notifyListeners();
+    _unlocked();
     return wrapped != null;
   }
 
@@ -123,6 +176,7 @@ class AppState extends ChangeNotifier {
       wipe(raw);
       notifyListeners();
     }
+    _unlocked();
     return true;
   }
 
@@ -136,13 +190,15 @@ class AppState extends ChangeNotifier {
       kdfP: _meta['p'] as int,
     );
     notifyListeners();
+    _unlocked();
   }
 
   Future<void> lock() async {
     for (final s in List.of(sessions)) {
       closeSession(s);
     }
-    await save();
+    sync.stop();
+    await save(syncAfter: false);
     core.lock();
     notifyListeners();
   }

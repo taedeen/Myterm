@@ -137,6 +137,28 @@ pub enum SessionEventDto {
     Error(String),
 }
 
+/// What a device needs to talk to the sync server. Derived from the vault
+/// master key, so every device in the vault gets the same values.
+pub struct SyncIdentity {
+    /// 32 hex chars; the server's id for this vault.
+    pub vault_id: String,
+    /// 64 hex chars; sent as X-MyTerm-Vault-Token. Never stored by the server.
+    pub vault_token: String,
+    /// SHA-256 of `vault_token`, registered with the server.
+    pub auth_hash: String,
+}
+
+/// One record ready to upload.
+pub struct SyncItem {
+    /// Opaque per-record key (64 hex); hides the record id from the server.
+    pub key: String,
+    /// SHA-256 of the record's current plaintext encoding; the app skips
+    /// uploading records whose digest it has already sent.
+    pub digest: String,
+    /// The record, encrypted under the vault master key.
+    pub data: Vec<u8>,
+}
+
 pub struct StoreBlobs {
     /// Vault records (ciphertext) + history and audit sealed inside the vault.
     pub store: Vec<u8>,
@@ -213,6 +235,16 @@ fn bool_str(v: Option<bool>) -> &'static str {
 impl State {
     fn field(&self, id: &str, f: &str) -> String {
         self.vault.get(id, f).map(|v| s(&v)).unwrap_or_default()
+    }
+
+    /// Writes a sealed blob only when its content changed, so unchanged
+    /// history isn't re-stamped (and re-uploaded by sync) on every save.
+    fn put_if_changed(&mut self, kind: &str, id: &str, data: &[u8], t: u64) -> anyhow::Result<()> {
+        if self.vault.get(id, "data").is_ok_and(|cur| cur.as_slice() == data) {
+            return Ok(());
+        }
+        self.vault.put(kind, id, "data", data, t)?;
+        Ok(())
     }
 
     /// Saves a trusted host key to the vault (one record per host + key type).
@@ -527,12 +559,12 @@ impl MyTerm {
             .collect();
         let local = codec::encode_history(&st.history);
         let shared = codec::encode_history(&st.history.sync_snapshot(|h| !opted_out.iter().any(|o| o == h)));
-        st.vault.put("history", &format!("history-local-{device}"), "data", &local, t)?;
+        st.put_if_changed("history", &format!("history-local-{device}"), &local, t)?;
         st.vault.set_device_only(&format!("history-local-{device}"), true)?;
-        st.vault.put("history", &format!("history-{device}"), "data", &shared, t)?;
+        st.put_if_changed("history", &format!("history-{device}"), &shared, t)?;
         // Audit stays on this device.
         let audit = st.audit.to_jsonl();
-        st.vault.put("audit", &format!("audit-{device}"), "data", audit.as_bytes(), t)?;
+        st.put_if_changed("audit", &format!("audit-{device}"), audit.as_bytes(), t)?;
         st.vault.set_device_only(&format!("audit-{device}"), true)?;
         Ok(StoreBlobs { store: codec::encode_records(st.vault.records()) })
     }
@@ -560,6 +592,98 @@ impl MyTerm {
                 }
             }
         }
+    }
+
+    // ----- sync server (see server/README.md)
+
+    /// Sync ids and token for this vault. Needs the vault unlocked.
+    #[frb(sync)]
+    pub fn sync_identity(&self) -> anyhow::Result<SyncIdentity> {
+        let st = self.st();
+        let id = st.vault.derive("sync-vault-id")?;
+        let token = sha256::hex(&*st.vault.derive("sync-auth")?);
+        Ok(SyncIdentity {
+            vault_id: sha256::hex(&id[..16]),
+            auth_hash: sha256::hex(&sha256::digest(token.as_bytes())),
+            vault_token: token,
+        })
+    }
+
+    /// Every record that may leave this device, each sealed for upload.
+    /// "This device only" records (audit log, full local history, flagged
+    /// credentials) are never included.
+    pub fn sync_collect(&self) -> anyhow::Result<Vec<SyncItem>> {
+        self.export_store()?; // seal current history into the vault first
+        let st = self.st();
+        let key_salt = st.vault.derive("sync-record-key")?;
+        let mut out = Vec::new();
+        for r in st.vault.outbound() {
+            let plain = codec::encode_records(std::iter::once(r));
+            let mut k = key_salt.to_vec();
+            k.extend_from_slice(r.id.as_bytes());
+            out.push(SyncItem {
+                key: sha256::hex(&sha256::digest(&k)),
+                digest: sha256::hex(&sha256::digest(&plain)),
+                data: st.vault.seal_blob("sync-record", &plain)?,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Merges records pulled from the sync server (other devices' copies).
+    /// Returns how many records changed locally.
+    pub fn sync_apply(&self, records: Vec<Vec<u8>>) -> anyhow::Result<u32> {
+        let mut st = self.st();
+        let mut changed = 0;
+        for sealed in records {
+            let plain = st.vault.open_blob("sync-record", &sealed)?;
+            for r in codec::decode_records(&plain)? {
+                if st.vault.merge_remote(&r) != myterm_core::sync::Causality::Equal {
+                    changed += 1;
+                }
+            }
+        }
+        if changed > 0 {
+            Self::load_history(&mut st);
+            st.load_known_hosts();
+        }
+        Ok(changed)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    /// Joins an existing vault (another device's) using its master password
+    /// and the password-wrapped key from the sync server. This device's own
+    /// hosts and credentials are re-encrypted under the joined vault's key
+    /// and kept. Returns the joined master key for biometric wrapping.
+    pub fn join_vault(
+        &self,
+        master_password: String,
+        password_wrapped: Vec<u8>,
+        kdf_salt: Vec<u8>,
+        kdf_m_kib: u32,
+        kdf_t: u32,
+        kdf_p: u32,
+        expected_vault_id: String,
+    ) -> anyhow::Result<Vec<u8>> {
+        let salt: [u8; 16] = kdf_salt.as_slice().try_into().map_err(|_| anyhow::anyhow!("bad salt"))?;
+        let params = KdfParams { m_cost_kib: kdf_m_kib, t_cost: kdf_t, p_cost: kdf_p, salt };
+        let kek = vault::derive_password_key(master_password.as_bytes(), &params)?;
+        let mk = vault::unwrap_master_key(&password_wrapped, &kek, "password")
+            .map_err(|_| anyhow::anyhow!("wrong master password for that vault"))?;
+        let derived_id = sha256::hex(&mk.derive("sync-vault-id")[..16]);
+        if derived_id != expected_vault_id {
+            anyhow::bail!("the server's vault doesn't match that key");
+        }
+        let raw = mk.expose_for_wrapping().to_vec();
+        let mut st = self.st();
+        if st.vault.is_unlocked() {
+            st.vault.rekey(mk)?;
+        } else {
+            st.vault.unlock(mk);
+        }
+        Self::load_history(&mut st);
+        st.load_known_hosts();
+        Ok(raw)
     }
 
     /// Records to upload to the sync backend (ciphertext only).

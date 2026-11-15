@@ -1,0 +1,25 @@
+# MyTerm sync server.
+#   1. echo "MYTERM_SYNC_TOKEN=$(openssl rand -hex 24)" > .env
+#   2. docker compose up -d --build
+# The app then connects to http://<this-host>:7341 (or https:// with TLS below).
+services:
+  myterm-sync:
+    build: .
+    container_name: myterm-sync
+    restart: unless-stopped
+    ports:
+      - "7341:7341"
+    environment:
+      MYTERM_SYNC_TOKEN: ${MYTERM_SYNC_TOKEN:?set MYTERM_SYNC_TOKEN in .env}
+      # Optional TLS: mount a cert and key and uncomment.
+      # MYTERM_SYNC_TLS_CERT: /certs/cert.pem
+      # MYTERM_SYNC_TLS_KEY: /certs/key.pem
+    volumes:
+      - ./data:/data
+      # - ./certs:/certs:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true

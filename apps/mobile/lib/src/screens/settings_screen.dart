@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
+import 'sync_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key, required this.state});
@@ -14,6 +15,7 @@ class SettingsScreen extends StatelessWidget {
         padding: EdgeInsets.all(24),
         child: Text('Settings', style: TextStyle(fontSize: 30, fontWeight: FontWeight.bold)),
       ),
+      SyncCard(state: state),
       Card(
         child: ListTile(
           leading: const Icon(Icons.keyboard),

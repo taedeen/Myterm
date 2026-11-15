@@ -168,11 +168,17 @@ pub fn encode_history(h: &HistoryStore) -> Vec<u8> {
     w.0.extend_from_slice(MAGIC_HISTORY);
     w.str(&h.device_id);
     w.u64(h.cap_per_host as u64);
-    let hosts = h.raw_hosts();
+    // Sorted, so identical history always encodes to identical bytes
+    // (HashMap order is random); unchanged history then isn't re-saved or
+    // re-uploaded.
+    let mut hosts: Vec<_> = h.raw_hosts().iter().collect();
+    hosts.sort_by(|a, b| a.0.cmp(b.0));
     w.len(hosts.len());
     for (host, entries) in hosts {
         w.str(host);
         w.len(entries.len());
+        let mut entries: Vec<_> = entries.iter().collect();
+        entries.sort_by(|a, b| a.0.cmp(b.0));
         for (cmd, e) in entries {
             w.str(cmd);
             w.u64(e.last_used);
@@ -229,6 +235,20 @@ mod tests {
         b.device_only = true;
         let bytes = encode_records([&a, &b]);
         assert_eq!(decode_records(&bytes).unwrap(), vec![a, b]);
+    }
+
+    #[test]
+    fn history_encoding_is_deterministic() {
+        let mut a = HistoryStore::new("phone");
+        let mut b = HistoryStore::new("phone");
+        let cmds: Vec<String> = (0..50).map(|i| format!("cmd {i}")).collect();
+        for (i, c) in cmds.iter().enumerate() {
+            a.record(&format!("h{}", i % 7), c, 10, RecordContext::default()).unwrap();
+        }
+        for (i, c) in cmds.iter().enumerate().rev() {
+            b.record(&format!("h{}", i % 7), c, 10, RecordContext::default()).unwrap();
+        }
+        assert_eq!(encode_history(&a), encode_history(&b));
     }
 
     #[test]
