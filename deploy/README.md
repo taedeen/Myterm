@@ -1,8 +1,67 @@
-# upgrade.sh: server1's apps, installed and upgraded from GitHub
+# Server tools: upgrade.sh, deploy-apk.sh, bootstrap.sh
 
-One script for every Docker app on server1 that comes from a GitHub repository:
-MyJam, the MyTerm sync server, and anything added later. The apps are listed
-in `~/.config/upgrade/apps.conf`; a new app is a new section there.
+| Script | What it does |
+| --- | --- |
+| `upgrade.sh` | Installs and upgrades a server's Docker apps from their GitHub repos (MyJam, the MyTerm sync server, anything added later) |
+| `deploy-apk.sh` | Finds every Android app your GitHub repos build, downloads the newest, and installs it on a phone, tablet or Fire TV over adb |
+| `bootstrap.sh` | Sets both up on a server, once |
+
+All three live in this folder. `bootstrap.sh` checks out just this folder on a
+server and links the scripts into `~/bin`, so `upgrade.sh --self-update`
+keeps them current.
+
+## Set up a server (server1 or any other)
+
+You need SSH access to the server, a user with `sudo`, and Docker if it will
+run Docker apps. Each server gets **its own** read-only deploy key: GitHub
+allows a deploy key on one repository only, and a lost server's key can then
+be removed without touching the others.
+
+**1. Copy `bootstrap.sh` to the server.** The repository is private, so the
+server can't download it before it has a key. From a machine that has it
+(server1, after its own setup):
+```sh
+scp ~/.local/share/myterm-tools/deploy/bootstrap.sh NEWSERVER:
+```
+Or open `deploy/bootstrap.sh` on GitHub, copy it, and paste it into
+`nano bootstrap.sh` on the server.
+
+**2. Run it on the server:**
+```sh
+bash bootstrap.sh
+```
+It walks through six steps and asks before anything that needs sudo:
+1. Checks for git, curl, python3, ssh and docker compose, and offers to
+   `apt install` what's missing (plus sqlite3 and adb, which are optional).
+2. Creates the key `~/.ssh/github-myterm_deploy` and the SSH alias
+   `github-myterm`, prints the public key, and waits while you add it at
+   https://github.com/taedeen/Myterm/settings/keys/new. Title it with the
+   server's name and leave *Allow write access* unticked.
+3. Checks out `deploy/` into `~/.local/share/myterm-tools`.
+4. Links `upgrade.sh` and `deploy-apk.sh` into `~/bin`. An existing plain
+   copy is kept as `upgrade.sh.old-<date>`.
+5. Creates an empty `~/.config/upgrade/apps.conf` (an existing one is kept).
+6. Optionally stores the GitHub token `deploy-apk.sh` needs (see below).
+
+Running it again is safe: finished steps are skipped.
+
+**3. List the server's apps** in `~/.config/upgrade/apps.conf`. Copy sections
+from `~/.local/share/myterm-tools/deploy/apps.conf.example` (MyJam and the
+MyTerm sync server are there, with every key explained), then install each:
+```sh
+upgrade.sh --setup myterm-sync
+```
+For an app from another private repository, give it its own SSH alias in
+`remote` (`git@github-NAME:owner/repo.git`). `--setup` creates that
+repository's deploy key and SSH entry, and tells you where to add the key.
+
+**On server1**, which already has `upgrade.sh` in `~/bin` and the `github-myterm`
+key: run `bash bootstrap.sh` as well. It reuses the key, keeps your
+`apps.conf`, and turns `~/bin/upgrade.sh` into a self-updating link. Your
+old `~/bin/fetch-apk.sh` and `deploy-apk.sh` aren't touched; the new
+`deploy-apk.sh` replaces both.
+
+## upgrade.sh
 
 ```sh
 upgrade.sh                  # upgrade every app that has something new
@@ -10,84 +69,77 @@ upgrade.sh myterm-sync      # just one
 upgrade.sh myjam --force    # rebuild and restart even if up to date
 upgrade.sh --list           # versions, and what's new on GitHub
 upgrade.sh --setup NAME     # first install: deploy key, clone, first start
+upgrade.sh --self-update    # update upgrade.sh and deploy-apk.sh themselves
 ```
 
-For each app it refuses to run if its files were edited by hand, shows what's
-new, backs up the files listed in `backup` (SQLite databases snapshotted
-consistently), fast-forwards, rebuilds, and waits for the health check. A
-failed build leaves the app on its old version. A failed health check prints
-the commands to go back. Backups go to `~/upgrade-backups/<app>/`, keeping 10.
+For each app it:
+- refuses to run if the app's files were edited by hand;
+- shows what's new;
+- backs up the files listed in `backup`, with SQLite databases snapshotted
+  consistently;
+- fast-forwards, rebuilds, and waits for the health check.
 
-## Install on server1 (once)
+If the build fails, the app stays on its old version. If the health check
+fails, it prints the commands to go back. Backups go to
+`~/upgrade-backups/<app>/`, keeping 10.
 
-**1. A read-only deploy key for this repository** (each repo needs its own):
-```sh
-ssh-keygen -t ed25519 -f ~/.ssh/github-myterm_deploy -N "" -C "server1 myterm (read-only)"
-cat ~/.ssh/github-myterm_deploy.pub
-```
-Add it at https://github.com/taedeen/Myterm/settings/keys/new with *Allow
-write access* unticked. Then:
-```sh
-cat >> ~/.ssh/config <<'CFG'
-
-Host github-myterm
-    HostName github.com
-    User git
-    IdentityFile ~/.ssh/github-myterm_deploy
-    IdentitiesOnly yes
-CFG
-chmod 600 ~/.ssh/config
-ssh -T github-myterm        # "Hi taedeen/Myterm! You've successfully authenticated…"
-```
-
-**2. Install the script and the app list:**
-```sh
-git clone -q --depth 1 -b dev git@github-myterm:taedeen/Myterm.git /tmp/myterm-tools
-mkdir -p ~/bin ~/.config/upgrade
-install -m 755 /tmp/myterm-tools/deploy/upgrade.sh ~/bin/upgrade.sh
-cp -n /tmp/myterm-tools/deploy/apps.conf.example ~/.config/upgrade/apps.conf
-rm -rf /tmp/myterm-tools
-```
-`~/bin` is on your PATH after your next login (Debian/Ubuntu add it if it exists).
-
-**3. Point MyJam's old script at the new one**, so `./upgrade.sh` in the MyJam
-folder keeps working:
+To keep the old habit in MyJam's folder:
 ```sh
 printf '#!/bin/sh\nexec "$HOME/bin/upgrade.sh" myjam "$@"\n' > ~/docker_volumes/MyJam/upgrade.sh
 ```
-(MyJam's backups now go to `~/upgrade-backups/myjam/`; the old `~/myjam-backups` stays as it is.)
 
-**4. Install the sync server:**
+## deploy-apk.sh
+
 ```sh
-upgrade.sh --setup myterm-sync
-```
-It checks out only the repo's `server/` folder into `~/docker_volumes/myterm-sync`,
-creates `server/.env` with a random token, gives the data folder to the
-container's user, starts it and waits for its health check. The token you'll
-type into the app is in `~/docker_volumes/myterm-sync/server/.env`.
-
-Then point your reverse proxy at `http://<server1>:7341`. If the proxy runs on
-server1 itself, keep the port off the network with a `docker-compose.override.yml`
-in `~/docker_volumes/myterm-sync/server/`. It isn't tracked by Git, so
-`upgrade.sh` leaves it alone (`!override` needs Docker Compose 2.24 or later):
-```yaml
-services:
-  myterm-sync:
-    ports: !override
-      - "127.0.0.1:7341:7341"
+deploy-apk.sh               # choose an app, download its newest build, install it
+deploy-apk.sh myterm        # the app whose repo name contains "myterm"
+deploy-apk.sh --list        # every app found, newest build, branch, date, size
+deploy-apk.sh --fetch       # download new builds only (for cron), no install
+deploy-apk.sh --refresh     # look through your repositories again
+deploy-apk.sh some.apk      # install a file you already have
 ```
 
-## Adding a future app
+**Finding apps:** it checks every repository the token can see for:
+- GitHub Release assets ending in `.apk` (last-litre-android), and
+- GitHub Actions build artifacts with an APK inside (MyJam-Android, Myterm).
 
-Add a section to `~/.config/upgrade/apps.conf` (the example file documents
-every key), then `upgrade.sh --setup NAME`. For a private repo, give it its
-own SSH alias (`git@github-NAME:owner/repo.git`); `--setup` creates the deploy
-key and the SSH entry, and tells you where to add the key on GitHub.
+It looks inside each kind of build once and remembers the answer, so new
+repositories with APKs appear by themselves. Builds from a repo's default
+branch are preferred; if there are none, the newest from any branch is used
+and `--list` says which branch. Downloads are kept in `~/apks/<repo>/`
+(newest as `<repo>-latest.apk`, plus 3 older).
+
+**Installing:**
+- **Picking the device:** you can choose a device that's already connected
+  (USB, or wireless from earlier). Otherwise it asks for the IP, the pairing
+  port and code (first time only), and the connection port, remembering the
+  last IP and port.
+- **After installing**, it reads the app's package and version from the APK,
+  shows the installed version, and opens the app.
+- **Signed with a different key:** if the device's copy was signed with
+  another key, it explains that an in-place update isn't possible. It
+  uninstalls first only if you type `yes`, because that deletes the app's
+  data on the device.
+
+**The token** (`~/.config/apk/github.token`, mode 600): create a fine-grained
+token at https://github.com/settings/personal-access-tokens/new with
+*Repository access: All repositories* and *Actions* and *Contents* read-only.
+Give it an expiry date. The old MyJam-only token in
+`~/.config/myjam/github-apk.token` still works as a fallback, but it only
+sees MyJam-Android.
+
+To keep the newest builds on the server every hour (replaces `fetch-apk.sh`):
+```
+17 * * * * $HOME/bin/deploy-apk.sh --fetch >> $HOME/apks/fetch.log 2>&1
+```
 
 ## Notes
 
-- Docker runs through `sudo`, as before. If your user is in the `docker`
-  group, `export UPGRADE_SUDO=` skips it.
-- `myterm-sync` follows the `dev` branch until pull request #1 is merged
-  into `main`; then change `branch = main` in `apps.conf`.
-- The script runs only when you run it, so nothing changes on server1 without you seeing it first.
+- Docker runs through `sudo`. If your user is in the `docker` group,
+  `export UPGRADE_SUDO=` skips it.
+- The scripts follow the Myterm repo's `dev` branch until pull request #1 is
+  merged; after that, set `MYTERM_TOOLS_BRANCH=main` for new bootstraps, and
+  on existing servers run
+  `git -C ~/.local/share/myterm-tools remote set-branches origin main && git -C ~/.local/share/myterm-tools fetch --depth 20 origin main && git -C ~/.local/share/myterm-tools checkout -B main origin/main`.
+- Nothing runs on a timer unless you add the cron line yourself, so nothing
+  changes on a server without you seeing it first.
