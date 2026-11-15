@@ -57,6 +57,14 @@ class AppState extends ChangeNotifier {
 
   Timer? _fontSizeTimer;
 
+  /// Tapping an autocomplete suggestion also presses Enter (default on).
+  bool get runSuggestionsImmediately => _meta['runSuggestions'] as bool? ?? true;
+  set runSuggestionsImmediately(bool v) {
+    _meta['runSuggestions'] = v;
+    notifyListeners();
+    _writeMeta();
+  }
+
   /// Sync with a MyTerm sync server (Settings → Sync).
   late final SyncService sync = SyncService(this);
 
