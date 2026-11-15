@@ -248,29 +248,43 @@ jobs:
           retention-days: 14
 
   release:
-    # Tag vX.Y.Z (matching pubspec.yaml's version) to publish a release.
+    # A push to main whose pubspec.yaml version has no release yet publishes
+    # it (tag vX.Y.Z on that commit). Pushing a vX.Y.Z tag works too.
     name: Release
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     needs: [core, crates, sync-server, windows, android]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      - name: Check the tag matches the app version
+      - name: Version to release
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           v="$(sed -n 's/^version: *\([0-9.]*\).*/\1/p' apps/mobile/pubspec.yaml)"
-          [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "Tag $GITHUB_REF_NAME doesn't match pubspec version $v"; exit 1; }
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "v$v" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME doesn't match pubspec version $v"; exit 1
+          fi
           echo "VERSION=$v" >> "$GITHUB_ENV"
+          if gh release view "v$v" >/dev/null 2>&1; then
+            echo "v$v is already released; nothing to do."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Releases must be signed with the real MyTerm key
-        if: needs.windows.outputs.signing != 'release'
+        if: steps.version.outputs.publish == 'true' && needs.windows.outputs.signing != 'release'
         run: |
           echo "::error::WINDOWS_SIGN_PFX / WINDOWS_SIGN_PASSWORD aren't set: run packaging/windows/New-MyTermSigningCert.ps1 first."
           exit 1
       - uses: actions/download-artifact@v4
+        if: steps.version.outputs.publish == 'true'
         with:
           path: artifacts
       - name: Assemble
+        if: steps.version.outputs.publish == 'true'
         run: |
           mkdir release
           cp artifacts/myterm-android-apk/app-release.apk "release/MyTerm-$VERSION.apk"
@@ -282,7 +296,8 @@ jobs:
           awk -v v="## $VERSION" '$0 ~ "^## " { if (p) exit; if (index($0, v) == 1) { p = 1; next } } p' CHANGELOG.md > notes.md
           [ -s notes.md ] || { echo "CHANGELOG.md has no section for $VERSION"; exit 1; }
       - name: Publish
+        if: steps.version.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" release/* --title "MyTerm $VERSION" --notes-file notes.md --verify-tag
+        run: gh release create "v$VERSION" release/* --target "$GITHUB_SHA" --title "MyTerm $VERSION" --notes-file notes.md
 
