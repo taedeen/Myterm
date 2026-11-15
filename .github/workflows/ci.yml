@@ -59,6 +59,41 @@ jobs:
           docker logs sync
           docker rm -f sync
 
+  windows:
+    name: Windows app
+    needs: [core]
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: flutter_rust_bridge_codegen@2.11.1
+      - name: Build
+        run: apps/mobile/tool/prepare_windows.sh
+      - name: Smoke test (the exe starts and loads the Rust core)
+        shell: pwsh
+        run: |
+          $exe = "apps/mobile/build/windows/x64/runner/Release/MyTerm.exe"
+          $p = Start-Process $exe -PassThru
+          Start-Sleep -Seconds 15
+          if ($p.HasExited) { Write-Error "MyTerm.exe exited early with code $($p.ExitCode)"; exit 1 }
+          Stop-Process -Id $p.Id -Force
+          Write-Host "MyTerm.exe is running"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: myterm-windows
+          path: apps/mobile/build/windows/x64/runner/Release/
+          retention-days: 14
+
   android:
     name: Android APK
     needs: [core]

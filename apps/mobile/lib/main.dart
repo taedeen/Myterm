@@ -39,7 +39,8 @@ class _MyTermAppState extends State<MyTermApp> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState s) {
     // Save on background; auto-lock when backgrounded with no live sessions.
-    if (s == AppLifecycleState.paused && widget.state.unlocked) {
+    // Phones go to `paused` in the background; desktop windows to `hidden` when minimised.
+    if ((s == AppLifecycleState.paused || s == AppLifecycleState.hidden) && widget.state.unlocked) {
       if (widget.state.liveCount == 0) {
         widget.state.lock();
       } else {

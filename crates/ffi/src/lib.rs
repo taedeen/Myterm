@@ -5,4 +5,5 @@
 //! `apps/mobile/lib/src/rust/`. Both are generated in CI and git-ignored.
 
 pub mod api;
+mod dpapi;
 mod frb_generated;

@@ -1191,3 +1191,14 @@ impl MyTerm {
         self.st().audit.to_jsonl()
     }
 }
+
+/// Windows: protects bytes with DPAPI for the current Windows user (used to
+/// keep the vault key for "Unlock with Windows Hello"). Errors elsewhere.
+pub fn os_protect(data: Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    crate::dpapi::protect(&data)
+}
+
+/// Windows: reverses [`os_protect`]. Errors elsewhere.
+pub fn os_unprotect(data: Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    crate::dpapi::unprotect(&data)
+}

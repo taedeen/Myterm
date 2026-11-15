@@ -51,7 +51,7 @@ class _UnlockScreenState extends State<UnlockScreen> {
 
   Future<void> _biometric() => _run(() async {
         if (!await widget.state.unlockWithBiometrics()) {
-          throw 'Biometric unlock cancelled. Use your master password.';
+          throw '${Native.unlockName[0].toUpperCase()}${Native.unlockName.substring(1)} unlock cancelled. Use your master password.';
         }
       });
 
@@ -61,7 +61,7 @@ class _UnlockScreenState extends State<UnlockScreen> {
         final bio = await widget.state.createVault(_pw.text);
         if (!bio && mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Biometric unlock unavailable; you will unlock with your master password.')),
+            SnackBar(content: Text('${Native.unlockName} unlock unavailable; you will unlock with your master password.')),
           );
         }
       });
@@ -126,7 +126,7 @@ class _UnlockScreenState extends State<UnlockScreen> {
               OutlinedButton.icon(
                 onPressed: _busy ? null : _biometric,
                 icon: const Icon(Icons.fingerprint),
-                label: const Text('Unlock with biometrics'),
+                label: Text('Unlock with ${Native.unlockName}'),
               ),
             ],
           ],
