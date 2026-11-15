@@ -1,0 +1,32 @@
+# MyTerm sync server.
+#   1. echo "MYTERM_SYNC_TOKEN=$(openssl rand -hex 24)" > .env
+#   2. mkdir -p data && sudo chown 10001:10001 data   (the container runs as uid 10001)
+#   3. docker compose up -d --build
+# Or let deploy/upgrade.sh do it: upgrade.sh --setup myterm-sync
+# The app then connects to http://<this-host>:7341 (or https:// with TLS below).
+services:
+  myterm-sync:
+    build: .
+    container_name: myterm-sync
+    restart: unless-stopped
+    ports:
+      # Behind a reverse proxy on this host, publish on localhost only:
+      # - "127.0.0.1:7341:7341"
+      - "7341:7341"
+    environment:
+      MYTERM_SYNC_TOKEN: ${MYTERM_SYNC_TOKEN:?set MYTERM_SYNC_TOKEN in .env}
+      # Behind a reverse proxy: rate-limit and log by the client's real IP.
+      # Only enable when the port isn't reachable except through the proxy.
+      MYTERM_SYNC_TRUST_PROXY: "true"
+      # Optional TLS: mount a cert and key and uncomment.
+      # MYTERM_SYNC_TLS_CERT: /certs/cert.pem
+      # MYTERM_SYNC_TLS_KEY: /certs/key.pem
+    volumes:
+      - ./data:/data
+      # - ./certs:/certs:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
