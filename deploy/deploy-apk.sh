@@ -490,7 +490,7 @@ install_apk() {   # install_apk APK
 
 # ---------------------------------------------------------------- main
 case "${1:-}" in
-  -h|--help) sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -h|--help) awk 'NR > 1 && !/^#/ {exit} NR > 1' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   --list)    gh_py list ;;
   --refresh) gh_py scan && gh_py list ;;
   --fetch)   gh_py fetch-all "${2:-}" ;;
