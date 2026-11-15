@@ -13,6 +13,7 @@ import 'rust/api.dart';
 import 'rust/frb_generated.dart';
 import 'sync_service.dart';
 import 'terminal_session.dart';
+import 'terminal_style.dart';
 
 /// Owns the Rust core, the on-disk store and vault unlock state.
 ///
@@ -38,6 +39,23 @@ class AppState extends ChangeNotifier {
     _keybarProfileId = id;
     notifyListeners();
   }
+
+  /// Terminal text size on this device (Settings, the Aa button in the
+  /// terminal, or Ctrl + = / - / 0). Kept in meta.json, not synced, because
+  /// a phone and a desktop want different sizes.
+  double get terminalFontSize =>
+      (_meta['terminalFontSize'] as num?)?.toDouble() ?? defaultTerminalFontSize;
+  set terminalFontSize(double v) {
+    final size = v.clamp(minTerminalFontSize, maxTerminalFontSize).roundToDouble();
+    if (size == terminalFontSize) return;
+    _meta['terminalFontSize'] = size;
+    notifyListeners();
+    // Dragging the slider changes it many times a second; write once it settles.
+    _fontSizeTimer?.cancel();
+    _fontSizeTimer = Timer(const Duration(milliseconds: 600), _writeMeta);
+  }
+
+  Timer? _fontSizeTimer;
 
   /// Sync with a MyTerm sync server (Settings → Sync).
   late final SyncService sync = SyncService(this);
