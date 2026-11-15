@@ -39,6 +39,16 @@ class SettingsScreen extends StatelessWidget {
         ),
       ),
       Card(
+        child: SwitchListTile(
+          secondary: const Icon(Icons.bolt),
+          title: const Text('Run suggestions straight away'),
+          subtitle: const Text('Tapping an autocomplete suggestion sends it with Enter. '
+              'Off: it is typed, and you press Enter yourself.'),
+          value: state.runSuggestionsImmediately,
+          onChanged: (v) => state.runSuggestionsImmediately = v,
+        ),
+      ),
+      Card(
         child: ListTile(
           leading: const Icon(Icons.receipt_long),
           title: const Text('Audit log'),

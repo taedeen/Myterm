@@ -183,7 +183,13 @@ class TerminalSession extends ChangeNotifier {
     final id = sessionId;
     if (id == null) return;
     core.acceptSuggestion(sessionId: id, line: s.line);
-    refreshSuggestions();
+    // Run it straight away (Settings → "Run suggestions straight away"),
+    // except snippets that still have {{placeholders}} to fill in.
+    if (state.runSuggestionsImmediately && !s.line.contains('{{')) {
+      send(Uint8List.fromList([13]));
+    } else {
+      refreshSuggestions();
+    }
   }
 
   // ------------------------------------------------------------ dialogs
