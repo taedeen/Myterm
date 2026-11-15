@@ -61,16 +61,94 @@ class TerminalScreen extends StatefulWidget {
 }
 
 class _TerminalScreenState extends State<TerminalScreen> {
-  final terminalController = TerminalController();
+  /// Sessions on screen: one, or two when split. [_focused] is the one the
+  /// keyboard, key bar, suggestions and tab row act on.
+  late final List<TerminalSession> _panes = [widget.session];
+  int _focused = 0;
 
-  /// The session on screen; the tab row switches it.
-  late TerminalSession s = widget.session;
+  /// Split direction: null (one pane), horizontal (side by side) or
+  /// vertical (top and bottom).
+  Axis? _split;
+
+  final _controllers = [TerminalController(), TerminalController()];
+  final _focusNodes = [FocusNode(), FocusNode()];
+
+  TerminalSession get s => _panes[_focused];
+  TerminalController get terminalController => _controllers[_focused];
   final _activeTab = GlobalKey();
 
+  /// Shows [next] in the focused pane (or focuses the pane already showing it).
   void _switchTo(TerminalSession next) {
-    if (identical(next, s)) return;
-    setState(() => s = next);
+    final at = _panes.indexWhere((p) => identical(p, next));
+    setState(() {
+      if (at >= 0) {
+        _focused = at;
+      } else {
+        _panes[_focused] = next;
+      }
+    });
+    _focusPane(_focused);
     _revealActiveTab();
+  }
+
+  void _focusPane(int i) {
+    if (i >= _panes.length) return;
+    if (_focused != i) setState(() => _focused = i);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _focusNodes[i].requestFocus());
+  }
+
+  /// Off → side by side → top and bottom → off. The second pane shows
+  /// another open session, or a new one to the same host if there is none.
+  void _cycleSplit() {
+    setState(() {
+      switch (_split) {
+        case null:
+          final other = widget.state.sessions.where((x) => !identical(x, s)).firstOrNull ??
+              widget.state.openSession(s.host);
+          _panes
+            ..clear()
+            ..addAll([s, other]);
+          _focused = 1;
+          _split = Axis.horizontal;
+        case Axis.horizontal:
+          _split = Axis.vertical;
+        case Axis.vertical:
+          final keep = s;
+          _panes
+            ..clear()
+            ..add(keep);
+          _focused = 0;
+          _split = null;
+      }
+    });
+    _focusPane(_focused);
+  }
+
+  /// One pane of the screen; tapping it gives it the keyboard.
+  Widget _pane(int i) {
+    final focused = i == _focused;
+    final pane = Listener(
+      onPointerDown: (_) => _focusPane(i),
+      child: TerminalPane(
+        terminal: _panes[i].terminal,
+        key: ObjectKey(_panes[i]),
+        controller: _controllers[i],
+        focusNode: _focusNodes[i],
+        autofocus: focused,
+        style: terminalStyle(widget.state.terminalFontSize),
+        onZoom: _zoom,
+        onKey: _suggestionKey,
+        onCopy: _copySelection,
+      ),
+    );
+    if (_split == null) return pane;
+    return DecoratedBox(
+      position: DecorationPosition.foreground,
+      decoration: BoxDecoration(
+        border: Border.all(color: focused ? const Color(0xFF2ECC71) : Colors.white12, width: focused ? 1.5 : 1),
+      ),
+      child: pane,
+    );
   }
 
   void _revealActiveTab() {
@@ -94,7 +172,12 @@ class _TerminalScreenState extends State<TerminalScreen> {
 
   @override
   void dispose() {
-    terminalController.dispose();
+    for (final c in _controllers) {
+      c.dispose();
+    }
+    for (final f in _focusNodes) {
+      f.dispose();
+    }
     super.dispose();
   }
 
@@ -242,6 +325,17 @@ class _TerminalScreenState extends State<TerminalScreen> {
     final list = widget.state.sessions;
     final i = list.indexOf(closing);
     widget.state.closeSession(closing);
+    final pane = _panes.indexWhere((p) => identical(p, closing));
+    if (pane >= 0 && _panes.length > 1) {
+      // Closing one half of a split: the other half takes the screen.
+      setState(() {
+        _panes.removeAt(pane);
+        _focused = 0;
+        _split = null;
+      });
+      _focusPane(0);
+      return;
+    }
     if (!identical(closing, s)) {
       setState(() {});
       return;
@@ -264,7 +358,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
       backgroundColor: const Color(0xFF151827),
       body: SafeArea(
         child: ListenableBuilder(
-          listenable: Listenable.merge([s, widget.state]),
+          listenable: Listenable.merge([..._panes, widget.state]),
           builder: (context, _) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             if (s.status.isNotEmpty)
               MaterialBanner(
@@ -275,15 +369,12 @@ class _TerminalScreenState extends State<TerminalScreen> {
                 ],
               ),
             Expanded(
-              child: TerminalPane(
-                terminal: s.terminal,
-                key: ObjectKey(s),
-                controller: terminalController,
-                style: terminalStyle(widget.state.terminalFontSize),
-                onZoom: _zoom,
-                onKey: _suggestionKey,
-                onCopy: _copySelection,
-              ),
+              child: _split == null
+                  ? _pane(0)
+                  : Flex(direction: _split!, children: [
+                      Expanded(child: _pane(0)),
+                      Expanded(child: _pane(1)),
+                    ]),
             ),
             SuggestionBar(suggestions: s.suggestions, selected: s.selected, onAccept: s.accept),
             _SessionTabs(
@@ -296,6 +387,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
               onNew: _newSession,
               onPaste: _paste,
               onTextSize: _textSizeSheet,
+              split: _split,
+              onSplit: _cycleSplit,
             ),
             KeyBar(
               profile: profile,
@@ -323,6 +416,8 @@ class _SessionTabs extends StatelessWidget {
     required this.onNew,
     required this.onPaste,
     required this.onTextSize,
+    required this.split,
+    required this.onSplit,
   });
 
   final List<TerminalSession> sessions;
@@ -334,6 +429,8 @@ class _SessionTabs extends StatelessWidget {
   final VoidCallback onNew;
   final VoidCallback onPaste;
   final VoidCallback onTextSize;
+  final Axis? split;
+  final VoidCallback onSplit;
 
   static final _compact = IconButton.styleFrom(
     minimumSize: const Size(33, 33),
@@ -383,6 +480,22 @@ class _SessionTabs extends StatelessWidget {
               },
             ),
           ),
+        ),
+        const SizedBox(width: 4),
+        IconButton.filledTonal(
+          style: _compact,
+          iconSize: 18,
+          onPressed: onSplit,
+          tooltip: switch (split) {
+            null => 'Split: side by side',
+            Axis.horizontal => 'Split: top and bottom',
+            Axis.vertical => 'One session',
+          },
+          icon: Icon(switch (split) {
+            null => Icons.vertical_split,
+            Axis.horizontal => Icons.horizontal_split,
+            Axis.vertical => Icons.crop_square,
+          }),
         ),
         const SizedBox(width: 4),
         IconButton.filledTonal(
@@ -546,6 +659,7 @@ class TerminalPane extends StatelessWidget {
     this.onKey,
     this.onCopy,
     this.autofocus = true,
+    this.focusNode,
   });
 
   final Terminal terminal;
@@ -558,6 +672,7 @@ class TerminalPane extends StatelessWidget {
   final KeyEventResult Function(KeyEvent event)? onKey;
   final VoidCallback? onCopy;
   final bool autofocus;
+  final FocusNode? focusNode;
 
   /// Handles the zoom keys before the terminal sees them.
   KeyEventResult _zoomKey(KeyEvent event) {
@@ -585,6 +700,7 @@ class TerminalPane extends StatelessWidget {
           terminal,
           controller: controller,
           autofocus: autofocus,
+          focusNode: focusNode,
           backgroundOpacity: 0,
           theme: TerminalThemes.defaultTheme,
           textStyle: style,
