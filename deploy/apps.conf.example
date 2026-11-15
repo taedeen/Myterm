@@ -1,0 +1,43 @@
+# Apps that upgrade.sh installs and upgrades from GitHub.
+# Copy to ~/.config/upgrade/apps.conf. One [section] per app; add future apps the same way.
+#
+# Keys:
+#   remote      Git URL. Use an SSH alias per repo (git@github-NAME:owner/repo.git): --setup creates
+#               a read-only deploy key and the ~/.ssh/config entry for it.
+#   branch      Branch to follow (default main).
+#   dir         Where the app lives on dbb (a Git checkout).
+#   subdir      Optional: only this folder of the repository is checked out, and Docker Compose
+#               runs there (for repos holding more than one app, e.g. MyTerm's server/).
+#   version     Optional: FILE:REGEX, first capture group = version. Default: the commit.
+#   backup      Files and folders (relative to dir) to back up before each upgrade.
+#               SQLite *.db files inside are snapshotted consistently with sqlite3 if installed.
+#   health      http:URL | log:SERVICE:TEXT ({version} = new version) | container:NAME
+#   health_wait Seconds to wait for health (default 120).
+#   init        Optional shell command run once by --setup, in dir, before the first start.
+
+[myjam]
+remote  = git@github-myjam:taedeen/MyJam-Hub.git
+branch  = main
+dir     = ~/docker_volumes/MyJam
+version = core/myjam/__init__.py:__version__ = "(.*)"
+backup  = .env config data/myjam.db
+health  = log:core:MyJam {version} ready
+
+[myterm-sync]
+remote  = git@github-myterm:taedeen/Myterm.git
+# 'dev' until pull request #1 is merged; then change to main.
+branch  = dev
+dir     = ~/docker_volumes/myterm-sync
+subdir  = server
+backup  = server/.env server/data
+health  = http:http://127.0.0.1:7341/v1/health
+# First install: a random server token, and a data folder the container's user (10001) can write.
+init    = cd server && { [ -f .env ] || echo "MYTERM_SYNC_TOKEN=$(openssl rand -hex 24)" > .env; } && chmod 600 .env && mkdir -p data && $SUDO chown 10001:10001 data
+
+# Example for a future app:
+# [newapp]
+# remote  = git@github-newapp:taedeen/NewApp.git
+# branch  = main
+# dir     = ~/docker_volumes/NewApp
+# backup  = .env data
+# health  = http:http://127.0.0.1:8080/health
