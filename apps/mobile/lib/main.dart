@@ -49,6 +49,7 @@ class _MyTermAppState extends State<MyTermApp> with WidgetsBindingObserver {
       }
     } else if (s == AppLifecycleState.resumed && st.unlocked) {
       st.sync.syncNow(); // back in front: fetch other devices' changes
+      st.reconnectWaiting();
     }
   }
 

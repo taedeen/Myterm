@@ -314,6 +314,60 @@ class _TerminalScreenState extends State<TerminalScreen> {
     return KeyEventResult.ignored;
   }
 
+  /// Choose which sessions receive the same typing.
+  Future<void> _broadcastSheet() async {
+    final st = widget.state;
+    final live = st.sessions.where((x) => !x.ended).toList();
+    final picked = st.broadcasting ? {...st.broadcast} : {s};
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) => SafeArea(
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const ListTile(
+              leading: Icon(Icons.cell_tower, color: Colors.amber),
+              title: Text('Type in several sessions at once'),
+              subtitle: Text('Typing, the key bar, paste, snippets and suggestions go to every ticked session. '
+                  'Stored passwords are never broadcast.'),
+            ),
+            for (final x in live)
+              CheckboxListTile(
+                value: picked.contains(x),
+                title: Text(_SessionTabs.titleFor(st.sessions, x)),
+                subtitle: Text(x.isLive ? (identical(x, s) ? 'This tab' : 'Connected') : 'Connecting'),
+                onChanged: (v) => setSheet(() => v == true ? picked.add(x) : picked.remove(x)),
+              ),
+            OverflowBar(alignment: MainAxisAlignment.end, children: [
+              TextButton(
+                onPressed: () => setSheet(() => picked
+                  ..clear()
+                  ..addAll(live)),
+                child: const Text('All'),
+              ),
+              TextButton(
+                onPressed: () {
+                  st.setBroadcast(const []);
+                  Navigator.pop(ctx);
+                },
+                child: const Text('Off'),
+              ),
+              FilledButton(
+                onPressed: picked.length < 2
+                    ? null
+                    : () {
+                        st.setBroadcast(picked);
+                        Navigator.pop(ctx);
+                      },
+                child: Text('Broadcast to ${picked.length}'),
+              ),
+            ]),
+          ]),
+        ),
+      ),
+    );
+  }
+
   /// Text size: +1, -1, or 0 for the default.
   void _zoom(int step) {
     final st = widget.state;
@@ -377,8 +431,36 @@ class _TerminalScreenState extends State<TerminalScreen> {
                 content: Text(s.status),
                 actions: [
                   if (s.ended) TextButton(onPressed: () => s.connect(), child: const Text('Reconnect')),
+                  if (s.reconnecting) TextButton(onPressed: s.reconnectNow, child: const Text('Retry now')),
                   TextButton(onPressed: _close, child: const Text('Close')),
                 ],
+              ),
+            if (widget.state.broadcasting && widget.state.broadcast.contains(s))
+              Material(
+                color: Colors.amber.shade800,
+                child: InkWell(
+                  onTap: _broadcastSheet,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                    child: Row(children: [
+                      const Icon(Icons.cell_tower, size: 16, color: Colors.black),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text('Typing goes to ${widget.state.broadcast.length} sessions',
+                            style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w600)),
+                      ),
+                      TextButton(
+                        style: TextButton.styleFrom(
+                          foregroundColor: Colors.black,
+                          visualDensity: VisualDensity.compact,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                        onPressed: () => widget.state.setBroadcast(const []),
+                        child: const Text('Stop'),
+                      ),
+                    ]),
+                  ),
+                ),
               ),
             Expanded(
               child: _split == null
@@ -401,6 +483,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
               onTextSize: _textSizeSheet,
               split: _split,
               onSplit: _cycleSplit,
+              broadcast: widget.state.broadcasting ? widget.state.broadcast : const {},
+              onBroadcast: _broadcastSheet,
             ),
             KeyBar(
               profile: profile,
@@ -430,6 +514,8 @@ class _SessionTabs extends StatelessWidget {
     required this.onTextSize,
     required this.split,
     required this.onSplit,
+    required this.broadcast,
+    required this.onBroadcast,
   });
 
   final List<TerminalSession> sessions;
@@ -443,6 +529,15 @@ class _SessionTabs extends StatelessWidget {
   final VoidCallback onTextSize;
   final Axis? split;
   final VoidCallback onSplit;
+  final Set<TerminalSession> broadcast;
+  final VoidCallback onBroadcast;
+
+  /// "user@host", with a number when the same host is open more than once.
+  static String titleFor(List<TerminalSession> sessions, TerminalSession t) {
+    final base = '${t.host.username.isEmpty ? '' : '${t.host.username}@'}${t.host.label}';
+    final same = sessions.where((x) => x.host.id == t.host.id).toList();
+    return same.length > 1 ? '$base (${same.indexOf(t) + 1})' : base;
+  }
 
   static final _compact = IconButton.styleFrom(
     minimumSize: const Size(33, 33),
@@ -451,12 +546,7 @@ class _SessionTabs extends StatelessWidget {
     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
   );
 
-  /// "user@host", with a number when the same host is open more than once.
-  String _title(TerminalSession t) {
-    final base = '${t.host.username.isEmpty ? '' : '${t.host.username}@'}${t.host.label}';
-    final same = sessions.where((x) => x.host.id == t.host.id).toList();
-    return same.length > 1 ? '$base (${same.indexOf(t) + 1})' : base;
-  }
+  String _title(TerminalSession t) => titleFor(sessions, t);
 
   @override
   Widget build(BuildContext context) {
@@ -483,7 +573,7 @@ class _SessionTabs extends StatelessWidget {
                 final active = identical(t, current);
                 return _Tab(
                   key: active ? activeKey : ObjectKey(t),
-                  title: _title(t),
+                  title: broadcast.contains(t) ? '📡 ${_title(t)}' : _title(t),
                   active: active,
                   live: t.isLive,
                   onTap: () => onSelect(t),
@@ -492,6 +582,16 @@ class _SessionTabs extends StatelessWidget {
               },
             ),
           ),
+        ),
+        const SizedBox(width: 4),
+        IconButton.filledTonal(
+          style: _compact,
+          iconSize: 18,
+          onPressed: onBroadcast,
+          tooltip: 'Type in several sessions at once',
+          isSelected: broadcast.isNotEmpty,
+          icon: const Icon(Icons.cell_tower),
+          selectedIcon: const Icon(Icons.cell_tower, color: Colors.amber),
         ),
         const SizedBox(width: 4),
         IconButton.filledTonal(

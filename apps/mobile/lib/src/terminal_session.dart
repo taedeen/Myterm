@@ -62,6 +62,21 @@ class TerminalSession extends ChangeNotifier {
   StreamSubscription<SessionEventDto>? _sub;
   bool _authTried = false;
 
+  /// For hosts with "Keep session running" (tmux): this tab's server-side
+  /// session, e.g. myterm-1. Set on first connect and kept for reconnects.
+  String? tmuxName;
+  bool get persistent => _host.persistent == true;
+
+  // Reconnecting after a dropped connection (persistent hosts only).
+  bool _wasLive = false; // reached Started at least once since connect()
+  bool _exited = false; // the remote program ended (exit, tmux detach)
+  bool _userClosed = false;
+  AuthChoice? _reusableAuth; // stored / hardware: safe to reuse unprompted
+  Timer? _retry;
+  int _attempt = 0;
+  static const _backoff = [1, 2, 5, 10, 20, 30];
+  static const _maxAttempts = 30;
+
   // Server output -> UTF-8 text -> terminal, chunk by chunk. The streaming
   // decoder also handles characters split across chunks.
   final _output = StreamController<List<int>>();
@@ -79,9 +94,22 @@ class TerminalSession extends ChangeNotifier {
   // ------------------------------------------------------------ connecting
 
   Future<void> connect({AuthChoice? auth}) async {
+    _retry?.cancel();
     _ended = false;
-    _setStatus('Connecting…');
-    auth ??= await _auth();
+    _exited = false;
+    _userClosed = false;
+    _wasLive = false;
+    _setStatus(_attempt > 0 ? 'Reconnecting… (attempt $_attempt)' : 'Connecting…');
+    // Hosts that sign in with a MyTerm certificate: renew it first if needed.
+    if (_usesCertificate()) {
+      try {
+        await state.sync.renewCertificate();
+      } catch (_) {
+        // Connect anyway: an unexpired certificate still works, and the
+        // connect error says what's missing otherwise.
+      }
+    }
+    auth ??= _reusableAuth ?? await _auth();
     if (auth == null) {
       _setStatus('Cancelled');
       _ended = true;
@@ -89,12 +117,15 @@ class TerminalSession extends ChangeNotifier {
       return;
     }
     _authTried = true;
+    _reusableAuth = auth is AuthChoice_Password ? null : auth;
+    if (persistent) tmuxName ??= state.tmuxNameFor(this);
     await _sub?.cancel();
     final stream = core.connect(
       hostId: _host.id,
       cols: terminal.viewWidth,
       rows: terminal.viewHeight,
       auth: auth,
+      tmuxSession: persistent ? tmuxName : null,
       confirmHostKey: _confirmHostKey,
       hardwareSign: (alias, data) => Native.signWithHardwareKey(alias, data),
     );
@@ -119,6 +150,8 @@ class TerminalSession extends ChangeNotifier {
     switch (ev) {
       case SessionEventDto_Started(:final field0):
         sessionId = field0;
+        _wasLive = true;
+        _attempt = 0;
         // The PTY was opened before layout; send the real size now.
         core.resize(sessionId: field0, cols: terminal.viewWidth, rows: terminal.viewHeight);
         state.sessionStarted(this);
@@ -126,19 +159,64 @@ class TerminalSession extends ChangeNotifier {
       case SessionEventDto_Output(:final field0):
         _output.add(field0);
       case SessionEventDto_Exit(:final field0):
+        _exited = true;
         terminal.write('\r\n[process exited${field0 == null ? '' : ' with $field0'}]\r\n');
       case SessionEventDto_Closed():
-        _closed('Disconnected');
+        if (!_maybeReconnect('Connection lost')) _closed('Disconnected');
       case SessionEventDto_Error(:final field0):
         if (field0.contains('authentication failed') && _host.hardwareKeyId == null && _authTried) {
           _authTried = false;
           _setStatus(field0);
           _retryWithPassword();
-        } else {
+        } else if (!_maybeReconnect(field0)) {
           _closed(field0);
         }
     }
   }
+
+  bool _usesCertificate() {
+    final hosts = {for (final h in core.listHosts()) h.id: h};
+    final ids = [..._host.jumpChain, _host.id];
+    for (var i = 0; i < ids.length; i++) {
+      final h = hosts[ids[i]];
+      if (h == null) continue;
+      if (h.useCertificate == true) return true;
+      for (final j in h.jumpChain) {
+        if (!ids.contains(j)) ids.add(j);
+      }
+    }
+    return false;
+  }
+
+  /// A persistent session that dropped (network change, sleep, server
+  /// restart) reconnects by itself and reattaches to its tmux session.
+  /// Not when the remote program ended, the user closed it, or connecting
+  /// would need a typed password.
+  bool _maybeReconnect(String reason) {
+    final retrying = _attempt > 0;
+    if (!persistent || _exited || _userClosed || (!_wasLive && !retrying) || _reusableAuth == null) return false;
+    if (_attempt >= _maxAttempts) return false;
+    sessionId = null;
+    suggestions = const [];
+    final delay = _backoff[_attempt.clamp(0, _backoff.length - 1)];
+    _attempt++;
+    if (!retrying) terminal.write('\r\n[connection lost: reconnecting]\r\n');
+    _setStatus('$reason. Reconnecting in ${delay}s… (attempt $_attempt)');
+    _retry?.cancel();
+    _retry = Timer(Duration(seconds: delay), () => connect());
+    state.sessionEnded(this);
+    return true;
+  }
+
+  /// Skips the wait before the next reconnect attempt (e.g. app back in front).
+  void reconnectNow() {
+    if (_retry?.isActive ?? false) {
+      _retry!.cancel();
+      connect();
+    }
+  }
+
+  bool get reconnecting => _retry?.isActive ?? false;
 
   /// Wrong or missing password: ask again, then reconnect.
   Future<void> _retryWithPassword() async {
@@ -153,6 +231,8 @@ class TerminalSession extends ChangeNotifier {
   void _closed(String status) {
     sessionId = null;
     _ended = true;
+    _attempt = 0;
+    _retry?.cancel();
     suggestions = const [];
     _setStatus(status);
     state.sessionEnded(this);
@@ -160,6 +240,9 @@ class TerminalSession extends ChangeNotifier {
 
   /// Ends the session (the X button).
   void disconnect() {
+    _userClosed = true;
+    _retry?.cancel();
+    _attempt = 0;
     final id = sessionId;
     if (id != null) {
       core.disconnect(sessionId: id);
@@ -170,6 +253,7 @@ class TerminalSession extends ChangeNotifier {
 
   /// Releases resources once the session is closed and off screen.
   void release() {
+    _retry?.cancel();
     _sub?.cancel();
     _text.cancel();
     _output.close();
@@ -177,7 +261,14 @@ class TerminalSession extends ChangeNotifier {
 
   // ------------------------------------------------------------ input
 
-  void send(Uint8List bytes) {
+  /// Typing, key bar, paste and snippets. With Broadcast on, the same
+  /// bytes also go to the other sessions in the group.
+  void send(Uint8List bytes, {bool mirror = true}) {
+    if (mirror && state.broadcasting && state.broadcast.contains(this)) {
+      for (final other in state.broadcast) {
+        if (!identical(other, this)) other.send(bytes, mirror: false);
+      }
+    }
     final id = sessionId;
     if (id == null) return;
     try {
@@ -202,6 +293,13 @@ class TerminalSession extends ChangeNotifier {
     final id = sessionId;
     if (id == null) return;
     core.acceptSuggestion(sessionId: id, line: s.line);
+    if (state.broadcasting && state.broadcast.contains(this)) {
+      // Others get the whole line: clear what's typed there (Ctrl-U), then type it.
+      final line = Uint8List.fromList([0x15, ...utf8.encode(s.line)]);
+      for (final other in state.broadcast) {
+        if (!identical(other, this)) other.send(line, mirror: false);
+      }
+    }
     // Run it straight away (Settings → "Run suggestions straight away"),
     // except snippets that still have {{placeholders}} to fill in.
     if (state.runSuggestionsImmediately && !s.line.contains('{{')) {

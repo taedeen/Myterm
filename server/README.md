@@ -89,11 +89,40 @@ minute while unlocked. Settings shows the last sync and any error.
 | `GET /v1/vaults/{id}/devices` | vault token | Devices that have synced: `{devices: [{device_id, name, first_seen, last_seen, records}]}` |
 | `DELETE /v1/vaults/{id}/devices/{device}` | vault token | Forget a retired device and remove its copies |
 | `POST /v1/vaults/{id}/successor` | vault token | Revoke: move to `{vault_id, auth_hash, wrapped}` under a new MK |
+| `POST /v1/vaults/{id}/ssh-cert` | vault token | Sign `{public_key}`: `{certificate, principals, hours}` |
+| `GET /v1/ssh-ca.pub` | none | The CA public key (text), for `TrustedUserCAKeys` |
 | `GET /v1/vaults/{id}/successor` | old vault token | After a move: `{vault_id, name, wrapped}` to rejoin with the master password |
 
 Server token: `Authorization: Bearer …`. Vault token: `X-MyTerm-Vault-Token: …`.
 Devices also send `X-MyTerm-Device` (id) and `X-MyTerm-Device-Name` for the
 device list. A moved vault answers everything else with `410 {"moved": true}`.
+
+## SSH certificates (optional)
+
+The sync server can act as an SSH certificate authority for your devices.
+Each device has its own key (never synced) and gets a short-lived certificate
+for it, so you don't copy public keys to servers, and a lost device's access
+ends when its last certificate expires (revoke it first so it can't renew).
+
+1. Turn it on in `server/.env` (then `upgrade.sh myterm-sync`):
+   ```
+   MYTERM_SYNC_CERT_PRINCIPALS=taedeen,root   # login names certificates allow
+   MYTERM_SYNC_CERT_HOURS=8                   # 1-168
+   ```
+   The CA key is created as `data/ssh_user_ca` on first start. Back it up
+   with the rest of `data/`; anyone with it can sign logins.
+2. On each server that should accept them (Settings → SSH certificate →
+   Server setup in the app shows the same with your address filled in):
+   ```
+   curl -fsS https://myterm.local.taedeen.com/v1/ssh-ca.pub | sudo tee /etc/ssh/myterm_user_ca.pub
+   echo "TrustedUserCAKeys /etc/ssh/myterm_user_ca.pub" | sudo tee /etc/ssh/sshd_config.d/myterm-ca.conf
+   sudo sshd -t && (sudo systemctl reload ssh || sudo systemctl reload sshd)
+   ```
+3. In the app, turn on **Sign in with MyTerm certificate** for those hosts.
+   Devices renew the certificate when it has under 2 hours left.
+
+Certificates carry the key id `myterm:<vault>:<device name>`, so the server's
+auth log shows which device logged in.
 
 ## Security notes
 

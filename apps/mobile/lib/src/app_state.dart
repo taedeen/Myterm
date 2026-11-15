@@ -275,9 +275,45 @@ class AppState extends ChangeNotifier {
   void closeSession(TerminalSession s) {
     s.disconnect();
     sessions.remove(s);
+    broadcast.remove(s);
     s.release();
     Native.keepAlive(liveCount);
     notifyListeners();
+  }
+
+  /// Sessions that receive the same typing (Broadcast in the session bar).
+  /// Typing in any of them goes to all; secure password typing never does.
+  final Set<TerminalSession> broadcast = {};
+  bool get broadcasting => broadcast.length > 1;
+
+  void setBroadcast(Iterable<TerminalSession> group) {
+    broadcast
+      ..clear()
+      ..addAll(group.where((s) => sessions.contains(s)));
+    if (broadcast.length < 2) broadcast.clear();
+    notifyListeners();
+  }
+
+  /// tmux session name for a persistent session: myterm-1, myterm-2, ... per
+  /// host, reusing the lowest free number, so tab 1 on the phone and tab 1
+  /// on the PC are the same server-side session.
+  String tmuxNameFor(TerminalSession s) {
+    final taken = sessions
+        .where((o) => !identical(o, s) && o.host.id == s.host.id)
+        .map((o) => o.tmuxName)
+        .whereType<String>()
+        .toSet();
+    for (var i = 1;; i++) {
+      final name = 'myterm-$i';
+      if (!taken.contains(name)) return name;
+    }
+  }
+
+  /// Back in front: sessions waiting to reconnect go now.
+  void reconnectWaiting() {
+    for (final s in sessions) {
+      s.reconnectNow();
+    }
   }
 
   int activeSessionsFor(String hostId) => sessions.where((s) => s.host.id == hostId && s.isLive).length;
@@ -300,6 +336,8 @@ class AppState extends ChangeNotifier {
         hardwareKeysOnly: h.hardwareKeysOnly,
         syncHistory: h.syncHistory,
         jumpChain: h.jumpChain,
+        useCertificate: h.useCertificate,
+        persistent: h.persistent,
       );
 
   /// Saves [password] to the Keychain as [host]'s login password and links it

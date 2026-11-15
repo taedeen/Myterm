@@ -63,6 +63,9 @@ pub enum Auth {
     /// OpenSSH private key text, optional passphrase.
     PrivateKey { openssh: SecretBuf, passphrase: Option<SecretBuf> },
     Hardware(Arc<dyn AsyncDerSigner>),
+    /// A software key plus an OpenSSH user certificate for it, signed by a
+    /// CA the server trusts (`TrustedUserCAKeys`). Short-lived by design.
+    Certificate { openssh: SecretBuf, certificate: String },
 }
 
 impl Auth {
@@ -78,6 +81,7 @@ impl Auth {
             Auth::Password(_) => "password",
             Auth::PrivateKey { .. } => "software",
             Auth::Hardware(_) => "hardware",
+            Auth::Certificate { .. } => "certificate",
         }
     }
 }
@@ -100,6 +104,8 @@ pub struct ConnectOptions {
     pub cols: u32,
     pub rows: u32,
     pub term: String,
+    /// Run this instead of a login shell (e.g. attach to tmux). Still gets a PTY.
+    pub command: Option<String>,
 }
 
 #[derive(Debug)]
@@ -241,6 +247,12 @@ async fn authenticate(handle: &mut Handle<Verifier>, t: &Target) -> Result<(), S
                 .await?
                 .success()
         }
+        Auth::Certificate { openssh, certificate } => {
+            let text = String::from_utf8_lossy(openssh.expose()).into_owned();
+            let key = russh::keys::decode_secret_key(&text, None).map_err(|e| SshError::Key(e.to_string()))?;
+            let cert = ssh_key::Certificate::from_openssh(certificate.trim()).map_err(|e| SshError::Key(e.to_string()))?;
+            handle.authenticate_openssh_cert(&t.user, Arc::new(key), cert).await?.success()
+        }
         Auth::Hardware(s) => {
             let blob = sshkey::ecdsa_p256_blob(&s.public_sec1()).map_err(|e| SshError::Key(e.to_string()))?;
             let public = ssh_key::PublicKey::from_bytes(&blob).map_err(|e| SshError::Key(e.to_string()))?;
@@ -343,7 +355,10 @@ pub async fn open_shell(
     let last = handles.last().expect("at least one hop");
     let mut channel = last.channel_open_session().await?;
     channel.request_pty(true, &opts.term, opts.cols, opts.rows, 0, 0, &[]).await?;
-    channel.request_shell(true).await?;
+    match &opts.command {
+        Some(cmd) => channel.exec(true, cmd.as_bytes()).await?,
+        None => channel.request_shell(true).await?,
+    }
 
     let (tx, mut rx) = mpsc::unbounded_channel::<Command>();
     tokio::spawn(async move {
@@ -370,4 +385,58 @@ pub async fn open_shell(
 
     let approved = newly_approved.lock().await.clone();
     Ok((ShellHandle { tx }, approved))
+}
+
+/// A new Ed25519 key for SSH certificates: (OpenSSH private key, public key line).
+pub fn new_certificate_key(comment: &str) -> Result<(SecretBuf, String), SshError> {
+    use rand_core::{OsRng, RngCore};
+    let mut seed = [0u8; 32];
+    OsRng.fill_bytes(&mut seed);
+    let pair = ssh_key::private::Ed25519Keypair::from_seed(&seed);
+    seed.iter_mut().for_each(|b| *b = 0);
+    let mut key = ssh_key::PrivateKey::from(pair);
+    key.set_comment(comment);
+    let private = key.to_openssh(ssh_key::LineEnding::LF).map_err(|e| SshError::Key(e.to_string()))?;
+    let public = key.public_key().to_openssh().map_err(|e| SshError::Key(e.to_string()))?;
+    Ok((SecretBuf::new(private.as_bytes().to_vec()), public))
+}
+
+/// What a user certificate allows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CertificateInfo {
+    pub key_id: String,
+    pub principals: Vec<String>,
+    pub valid_after: u64,
+    pub valid_before: u64,
+    /// The certified public key, as an OpenSSH line without comment.
+    pub public_key: String,
+}
+
+pub fn certificate_info(certificate: &str) -> Result<CertificateInfo, SshError> {
+    let cert = ssh_key::Certificate::from_openssh(certificate.trim()).map_err(|e| SshError::Key(e.to_string()))?;
+    let public = ssh_key::PublicKey::from(cert.public_key().clone())
+        .to_openssh()
+        .map_err(|e| SshError::Key(e.to_string()))?;
+    Ok(CertificateInfo {
+        key_id: cert.key_id().to_string(),
+        principals: cert.valid_principals().to_vec(),
+        valid_after: cert.valid_after(),
+        valid_before: cert.valid_before(),
+        public_key: public,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn certificate_key_round_trips() {
+        let (private, public) = new_certificate_key("test@myterm").unwrap();
+        assert!(public.starts_with("ssh-ed25519 "));
+        let text = String::from_utf8(private.expose().to_vec()).unwrap();
+        let key = russh::keys::decode_secret_key(&text, None).unwrap();
+        let two = |l: &str| l.split_whitespace().take(2).collect::<Vec<_>>().join(" ");
+        assert_eq!(two(&key.public_key().to_openssh().unwrap()), two(&public));
+    }
 }

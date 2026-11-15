@@ -54,9 +54,14 @@ jobs:
         working-directory: server
         run: |
           docker build -t myterm-sync:ci .
-          docker run -d --name sync -p 7341:7341 -e MYTERM_SYNC_TOKEN=ci-token-0123456789abcdef0123 myterm-sync:ci
+          mkdir -p "$RUNNER_TEMP/syncdata" && sudo chown 10001:10001 "$RUNNER_TEMP/syncdata"
+          docker run -d --name sync -p 7341:7341 -e MYTERM_SYNC_TOKEN=ci-token-0123456789abcdef0123 \
+            -e MYTERM_SYNC_CERT_PRINCIPALS=ci --tmpfs /tmp --read-only --user 10001 \
+            -v "$RUNNER_TEMP/syncdata:/data" myterm-sync:ci
           for i in $(seq 1 20); do curl -fsS http://127.0.0.1:7341/v1/health && break; sleep 1; done
           curl -fsS http://127.0.0.1:7341/v1/health | grep -q '"ok": true'
+          # Certificates on: the CA was created and is served.
+          curl -fsS http://127.0.0.1:7341/v1/ssh-ca.pub | grep -q '^ssh-ed25519 .* myterm-user-ca'
           docker logs sync
           docker rm -f sync
 
