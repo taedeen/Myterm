@@ -15,6 +15,9 @@
 # Builds from the repository's default branch are preferred; if it has none, the
 # newest build from any branch is used (and the list says which branch).
 #
+# Devices you install to (IP, connection and pairing ports) are remembered in
+# ~/.config/apk/adb-devices and offered next time.
+#
 # Needs: adb, curl, python3, and a read-only GitHub token in ~/.config/apk/github.token
 # (see deploy/README.md: fine-grained, all repositories, Actions + Contents read-only).
 set -euo pipefail
@@ -24,12 +27,24 @@ STORE="${APK_STORE:-$HOME/apks}"
 TOKEN_FILE="${APK_TOKEN_FILE:-$CONF_DIR/github.token}"
 KEEP="${APK_KEEP:-3}"
 CATALOG="$CONF_DIR/catalog.json"
-LAST="$CONF_DIR/adb-last"
+DEVICES="$CONF_DIR/adb-devices"   # one line per device: ip connect-port pairing-port model
 
 die()  { printf '\033[31m%s\033[0m\n' "$*" >&2; exit 1; }
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
 
 mkdir -p "$CONF_DIR" "$STORE"
+
+# Bring in the device remembered by earlier versions of this script
+# (~/.config/myjam/adb-last from the MyJam one, ~/.config/apk/adb-last).
+if [ ! -f "$DEVICES" ]; then
+  for old in "$HOME/.config/myjam/adb-last" "$CONF_DIR/adb-last"; do
+    if [ -s "$old" ]; then
+      read -r o_ip o_conn _ < "$old" || true
+      [ -n "${o_ip:-}" ] && printf '%s %s - \n' "$o_ip" "${o_conn:--}" >> "$DEVICES"
+    fi
+  done
+  [ -f "$DEVICES" ] && { awk '!seen[$1]++' "$DEVICES" > "$DEVICES.tmp" && mv "$DEVICES.tmp" "$DEVICES"; }
+fi
 chmod 700 "$CONF_DIR"
 command -v python3 >/dev/null || die "python3 is needed: sudo apt install python3"
 
@@ -355,7 +370,7 @@ is_ip()   { [[ "$1" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; }
 is_port() { [[ "$1" =~ ^[0-9]{1,5}$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 65535 ]; }
 
 pick_device() {   # prints the adb serial to use
-  local connected last_ip="" last_port="" ip pair code conn out
+  local connected last_ip="" last_port="" last_pair="" ip pair code conn out
   # A device already connected (USB, or wireless from earlier)?
   mapfile -t connected < <(adb devices | awk 'NR > 1 && $2 == "device" {print $1}')
   if [ "${#connected[@]}" -gt 0 ]; then
@@ -370,23 +385,73 @@ pick_device() {   # prints the adb serial to use
       printf '%s' "${connected[$((n - 1))]}"; return
     fi
   fi
-  [ -f "$LAST" ] && read -r last_ip last_port < "$LAST" || true
+  # Known devices, most recent first: "ip connect-port pairing-port model".
+  local -a known=() ; local line
+  [ -f "$DEVICES" ] && mapfile -t known < <(grep -v '^\s*$' "$DEVICES")
+  local kip="" kconn="" kpair="" kname=""
+  if [ "${#known[@]}" -gt 0 ]; then
+    echo "Known devices:" >&2
+    local j=1
+    for line in "${known[@]}"; do
+      read -r kip kconn kpair kname <<<"$line"
+      printf '%2d. %s  connect %s  pair %s  %s\n' "$j" "$kip" "${kconn:--}" "${kpair:--}" "${kname:-}" >&2
+      j=$((j + 1))
+    done
+    printf '%2d. a new device\n' "$j" >&2
+    local k; k="$(ask "Device" 1)"
+    if [[ "$k" =~ ^[0-9]+$ ]] && [ "$k" -ge 1 ] && [ "$k" -lt "$j" ]; then
+      read -r last_ip last_port last_pair _ <<<"${known[$((k - 1))]}"
+    fi
+  fi
+  [ "$last_port" = "-" ] && last_port=""
+  [ "${last_pair:-}" = "-" ] && last_pair=""
   ip="$(ask "Device IP address" "$last_ip")"
   is_ip "$ip" || die "That isn't an IP address: $ip"
-  pair="$(ask "Pairing port (blank if this device is already paired)" "")"
+  if [ "$ip" != "$last_ip" ]; then
+    # Typed an address that's in the list? Use its saved ports.
+    last_port=""; last_pair=""
+    for line in "${known[@]}"; do
+      read -r kip kconn kpair _ <<<"$line"
+      if [ "$kip" = "$ip" ]; then
+        last_port="${kconn#-}"; last_pair="${kpair#-}"; break
+      fi
+    done
+  fi
+  echo "Ports are on the device: Developer options -> Wireless debugging. Android changes them when" >&2
+  echo "Wireless debugging is turned back on, so press Enter to reuse the saved ones or type the new ones." >&2
+  if [ -n "${last_port}${last_pair:-}" ]; then
+    # A device used before is normally still paired.
+    local again; again="$(ask "Pair it again? (only if adb was reset or the device forgot this server) y/N" "N")"
+    if [[ "$again" =~ ^[Yy] ]]; then
+      pair="$(ask "Pairing port" "${last_pair:-}")"
+    else
+      pair=""
+    fi
+  else
+    pair="$(ask "Pairing port (Enter to skip if this device is already paired)" "")"
+  fi
   if [ -n "$pair" ]; then
     is_port "$pair" || die "That isn't a port: $pair"
     code="$(ask "Pairing code (6 digits)" "")"
     [[ "$code" =~ ^[0-9]{6}$ ]] || die "The pairing code is 6 digits"
     adb pair "$ip:$pair" "$code" >&2
+  else
+    pair="${last_pair:-}"
   fi
-  [ "$ip" = "$last_ip" ] || last_port=""
-  conn="$(ask "Connection port (on the Wireless debugging screen)" "$last_port")"
+  conn="$(ask "Connection port" "$last_port")"
   is_port "$conn" || die "That isn't a port: $conn"
   out="$(adb connect "$ip:$conn" 2>&1)"; echo "$out" >&2
-  case "$out" in *"connected to"*) ;; *) die "Couldn't connect. Is Wireless debugging still on, and the port right?";; esac
-  echo "$ip $conn" > "$LAST"
+  case "$out" in *"connected to"*) ;; *) die "Couldn't connect. Is Wireless debugging still on, and the port right? (It changes each time Wireless debugging is switched on.)";; esac
+  remember_device "$ip" "$conn" "$pair" "$(adb -s "$ip:$conn" shell getprop ro.product.model 2>/dev/null | tr -d '\r ' || true)"
   printf '%s' "$ip:$conn"
+}
+
+# remember_device IP CONNECT PAIR MODEL: moves it to the top of the list.
+remember_device() {
+  local tmp; tmp="$(mktemp)"
+  printf '%s %s %s %s\n' "$1" "${2:--}" "${3:--}" "${4:-}" > "$tmp"
+  [ -f "$DEVICES" ] && awk -v ip="$1" '$1 != ip' "$DEVICES" | head -n 19 >> "$tmp"
+  mv "$tmp" "$DEVICES"
 }
 
 install_apk() {   # install_apk APK
@@ -425,7 +490,7 @@ install_apk() {   # install_apk APK
 
 # ---------------------------------------------------------------- main
 case "${1:-}" in
-  -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -h|--help) sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   --list)    gh_py list ;;
   --refresh) gh_py scan && gh_py list ;;
   --fetch)   gh_py fetch-all "${2:-}" ;;
