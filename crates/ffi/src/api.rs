@@ -164,6 +164,21 @@ pub struct StoreBlobs {
     pub store: Vec<u8>,
 }
 
+/// A new master key made to revoke a lost device (see `prepare_key_rotation`).
+pub struct KeyRotation {
+    /// Raw new MK: pass to `apply_key_rotation`, then zero it.
+    pub master_key: Vec<u8>,
+    /// The new MK wrapped with the master password (new one if given).
+    pub password_wrapped: Vec<u8>,
+    pub kdf_salt: Vec<u8>,
+    pub kdf_m_kib: u32,
+    pub kdf_t: u32,
+    pub kdf_p: u32,
+    /// The successor vault's sync id and token hash, for the server.
+    pub vault_id: String,
+    pub auth_hash: String,
+}
+
 pub struct VaultSetup {
     /// MK wrapped with the master password (store next to the store blob).
     pub password_wrapped: Vec<u8>,
@@ -621,12 +636,62 @@ impl MyTerm {
     pub fn sync_identity(&self) -> anyhow::Result<SyncIdentity> {
         let st = self.st();
         let id = st.vault.derive("sync-vault-id")?;
-        let token = sha256::hex(&*st.vault.derive("sync-auth")?);
-        Ok(SyncIdentity {
-            vault_id: sha256::hex(&id[..16]),
-            auth_hash: sha256::hex(&sha256::digest(token.as_bytes())),
-            vault_token: token,
+        let auth = st.vault.derive("sync-auth")?;
+        Ok(identity_from(&id, &auth))
+    }
+
+    /// Revoking a lost device, step 1: checks the master password and makes
+    /// a new master key, wrapped with `new_password` if given (else the
+    /// current one). Nothing changes locally until `apply_key_rotation`, so
+    /// the server can be moved to the new vault first.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_key_rotation(
+        &self,
+        master_password: String,
+        new_password: Option<String>,
+        password_wrapped: Vec<u8>,
+        kdf_salt: Vec<u8>,
+        kdf_m_kib: u32,
+        kdf_t: u32,
+        kdf_p: u32,
+    ) -> anyhow::Result<KeyRotation> {
+        let salt: [u8; 16] = kdf_salt.as_slice().try_into().map_err(|_| anyhow::anyhow!("bad salt"))?;
+        let params = KdfParams { m_cost_kib: kdf_m_kib, t_cost: kdf_t, p_cost: kdf_p, salt };
+        let kek = vault::derive_password_key(master_password.as_bytes(), &params)?;
+        let current = vault::unwrap_master_key(&password_wrapped, &kek, "password")
+            .map_err(|_| anyhow::anyhow!("wrong master password"))?;
+        if *current.derive("sync-vault-id") != *self.st().vault.derive("sync-vault-id")? {
+            anyhow::bail!("that password is for a different vault");
+        }
+        let password = new_password.filter(|p| !p.is_empty()).unwrap_or(master_password);
+        // Mobile parameters: every device, phones included, unwraps this copy.
+        let params = KdfParams::mobile();
+        let kek = vault::derive_password_key(password.as_bytes(), &params)?;
+        let mk = MasterKey::generate();
+        let ident = identity_from(&mk.derive("sync-vault-id"), &mk.derive("sync-auth"));
+        Ok(KeyRotation {
+            password_wrapped: vault::wrap_master_key(&mk, &kek, "password"),
+            kdf_salt: params.salt.to_vec(),
+            kdf_m_kib: params.m_cost_kib,
+            kdf_t: params.t_cost,
+            kdf_p: params.p_cost,
+            master_key: mk.expose_for_wrapping().to_vec(),
+            vault_id: ident.vault_id,
+            auth_hash: ident.auth_hash,
         })
+    }
+
+    /// Revoking a lost device, step 2: re-encrypts everything on this device
+    /// under the new master key from `prepare_key_rotation`.
+    pub fn apply_key_rotation(&self, master_key: Vec<u8>) -> anyhow::Result<()> {
+        let bytes: [u8; 32] = master_key.as_slice().try_into().map_err(|_| anyhow::anyhow!("bad key length"))?;
+        let mut st = self.st();
+        st.vault.rekey(MasterKey::from_bytes(bytes))?;
+        Self::load_history(&mut st);
+        Self::load_audit(&mut st);
+        st.load_known_hosts();
+        st.audit.append(now(), AuditKind::DeviceRevoked, None, None, "vault key rotated");
+        Ok(())
     }
 
     /// Every record that may leave this device, each sealed for upload.
@@ -1217,6 +1282,16 @@ impl MyTerm {
     /// Records a sync outcome in the audit log (counts and errors only).
     pub fn audit_sync(&self, detail: String) {
         self.st().audit.append(now(), AuditKind::Sync, None, None, &detail);
+    }
+}
+
+/// Sync id and token from the two HKDF outputs of a master key.
+fn identity_from(id: &[u8; 32], auth: &[u8; 32]) -> SyncIdentity {
+    let token = sha256::hex(auth);
+    SyncIdentity {
+        vault_id: sha256::hex(&id[..16]),
+        auth_hash: sha256::hex(&sha256::digest(token.as_bytes())),
+        vault_token: token,
     }
 }
 

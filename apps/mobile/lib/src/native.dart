@@ -115,6 +115,19 @@ class Native {
   }
 
   /// Foreground service that keeps SSH sessions alive in the background.
+  /// A name for this device in the sync device list, e.g. "Google Pixel 8"
+  /// or the Windows computer name.
+  static Future<String> deviceModel() async {
+    if (_android) {
+      try {
+        return await _ch.invokeMethod<String>('deviceModel') ?? 'Android device';
+      } catch (_) {
+        return 'Android device';
+      }
+    }
+    return Platform.localHostname;
+  }
+
   static Future<void> keepAlive(int sessions) async {
     // Desktop apps keep running in the background anyway.
     if (_android) await _ch.invokeMethod('keepAlive', {'sessions': sessions});

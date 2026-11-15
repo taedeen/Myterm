@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import '../native.dart';
 import '../rust/api.dart';
+import 'sync_screen.dart' show followMoveDialog;
 import 'terminal_screen.dart';
 
 class HostsScreen extends StatefulWidget {
@@ -65,6 +66,14 @@ class _HostsScreenState extends State<HostsScreen> {
             leading: Icon(Icons.sync_disabled, color: Colors.orange),
             title: Text('Sync is not set up on this device'),
             subtitle: Text('Hosts stay on this device until you join your vault: Settings → Sync'),
+          )
+        else if (sync.moved)
+          ListTile(
+            dense: true,
+            leading: const Icon(Icons.key, color: Colors.orange),
+            title: const Text('Your vault has a new key'),
+            subtitle: const Text('A device was revoked elsewhere. Tap to enter your master password and keep syncing.'),
+            onTap: () => followMoveDialog(context, widget.state),
           )
         else if (sync.lastError != null)
           ListTile(

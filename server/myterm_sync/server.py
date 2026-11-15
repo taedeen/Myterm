@@ -17,6 +17,14 @@ Each device's latest copy of each record is kept separately, so concurrent
 edits from two devices never overwrite each other on the server; clients
 merge them (field-level last-writer-wins, see crates/core/src/sync.rs).
 
+Devices identify themselves (X-MyTerm-Device, X-MyTerm-Device-Name) so the
+vault's device list can show what is syncing. A retired device can be
+forgotten (its copies removed). A lost device is revoked by moving the vault:
+a remaining device makes a new master key and registers the successor vault
+with the old vault's token; the old vault's data is deleted and it answers
+410 Gone, pointing other devices at the successor, which they join with the
+master password (which the lost device's thief doesn't have).
+
 Standard library only, so it runs anywhere Python 3.11+ runs.
 """
 
@@ -71,14 +79,25 @@ CREATE TABLE IF NOT EXISTS records (
     PRIMARY KEY (vault_id, key, device_id)
 );
 CREATE INDEX IF NOT EXISTS records_by_seq ON records (vault_id, seq);
+CREATE TABLE IF NOT EXISTS devices (
+    vault_id   TEXT NOT NULL REFERENCES vaults(id) ON DELETE CASCADE,
+    device_id  TEXT NOT NULL,
+    name       TEXT NOT NULL DEFAULT '',
+    first_seen INTEGER NOT NULL,
+    last_seen  INTEGER NOT NULL,
+    PRIMARY KEY (vault_id, device_id)
+);
 """
+
+DEVICE_NAME_MAX = 64
 
 
 class ApiError(Exception):
-    def __init__(self, status: HTTPStatus, message: str):
+    def __init__(self, status: HTTPStatus, message: str, **extra):
         super().__init__(message)
         self.status = status
         self.message = message
+        self.extra = extra
 
 
 class Store:
@@ -92,6 +111,9 @@ class Store:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.executescript(SCHEMA)
+        cols = [r[1] for r in self.db.execute("PRAGMA table_info(vaults)")]
+        if "moved_to" not in cols:  # databases from before device revocation
+            self.db.execute("ALTER TABLE vaults ADD COLUMN moved_to TEXT")
         self.lock = threading.Lock()
 
     def create_vault(self, vault_id: str, name: str, auth_hash: str, wrapped: dict) -> None:
@@ -111,10 +133,80 @@ class Store:
             return None
         return {"vault_id": row[0], "wrapped": json.loads(row[1])}
 
-    def auth_hash(self, vault_id: str) -> str | None:
+    def auth_hash(self, vault_id: str) -> tuple[str, str | None] | None:
+        """(auth_hash, moved_to) of a vault, or None."""
         with self.lock:
-            row = self.db.execute("SELECT auth_hash FROM vaults WHERE id = ?", (vault_id,)).fetchone()
-        return row[0] if row else None
+            row = self.db.execute("SELECT auth_hash, moved_to FROM vaults WHERE id = ?", (vault_id,)).fetchone()
+        return (row[0], row[1]) if row else None
+
+    def successor(self, vault_id: str) -> dict | None:
+        with self.lock:
+            row = self.db.execute(
+                "SELECT n.id, n.name, n.wrapped FROM vaults o JOIN vaults n ON n.id = o.moved_to WHERE o.id = ?",
+                (vault_id,),
+            ).fetchone()
+        return {"vault_id": row[0], "name": row[1], "wrapped": json.loads(row[2])} if row else None
+
+    def move_vault(self, old_id: str, new_id: str, auth_hash: str, wrapped: dict) -> None:
+        """Replaces a vault with a successor under the same name; the old
+        one keeps only a pointer (its records and devices are deleted)."""
+        now = int(time.time())
+        with self.lock:
+            self.db.execute("BEGIN IMMEDIATE")
+            try:
+                (name,) = self.db.execute("SELECT name FROM vaults WHERE id = ?", (old_id,)).fetchone()
+                self.db.execute(
+                    "UPDATE vaults SET name = ?, moved_to = ? WHERE id = ?", (f"{name}~moved~{old_id}", new_id, old_id)
+                )
+                # Anything that pointed at the old vault now points at the new one.
+                self.db.execute("UPDATE vaults SET moved_to = ? WHERE moved_to = ?", (new_id, old_id))
+                self.db.execute(
+                    "INSERT INTO vaults (id, name, auth_hash, wrapped, created_at) VALUES (?, ?, ?, ?, ?)",
+                    (new_id, name, auth_hash, json.dumps(wrapped), now),
+                )
+                self.db.execute("DELETE FROM records WHERE vault_id = ?", (old_id,))
+                self.db.execute("DELETE FROM devices WHERE vault_id = ?", (old_id,))
+                self.db.execute("COMMIT")
+            except sqlite3.IntegrityError:
+                self.db.execute("ROLLBACK")
+                raise ApiError(HTTPStatus.CONFLICT, "that successor vault already exists")
+            except BaseException:
+                self.db.execute("ROLLBACK")
+                raise
+
+    def touch_device(self, vault_id: str, device_id: str, name: str | None) -> None:
+        now = int(time.time())
+        with self.lock:
+            self.db.execute(
+                "INSERT INTO devices (vault_id, device_id, name, first_seen, last_seen) VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT (vault_id, device_id) DO UPDATE SET last_seen = excluded.last_seen, "
+                "name = CASE WHEN excluded.name != '' THEN excluded.name ELSE devices.name END",
+                (vault_id, device_id, name or "", now, now),
+            )
+
+    def devices(self, vault_id: str) -> list[dict]:
+        with self.lock:
+            rows = self.db.execute(
+                "SELECT d.device_id, d.name, d.first_seen, d.last_seen, "
+                "(SELECT COUNT(*) FROM records r WHERE r.vault_id = d.vault_id AND r.device_id = d.device_id) "
+                "FROM devices d WHERE d.vault_id = ? ORDER BY d.last_seen DESC",
+                (vault_id,),
+            ).fetchall()
+        return [
+            {"device_id": d, "name": n, "first_seen": f, "last_seen": l, "records": c} for d, n, f, l, c in rows
+        ]
+
+    def forget_device(self, vault_id: str, device_id: str) -> bool:
+        with self.lock:
+            self.db.execute("BEGIN IMMEDIATE")
+            try:
+                cur = self.db.execute("DELETE FROM devices WHERE vault_id = ? AND device_id = ?", (vault_id, device_id))
+                self.db.execute("DELETE FROM records WHERE vault_id = ? AND device_id = ?", (vault_id, device_id))
+                self.db.execute("COMMIT")
+            except BaseException:
+                self.db.execute("ROLLBACK")
+                raise
+        return cur.rowcount > 0
 
     def set_wrapped(self, vault_id: str, wrapped: dict) -> None:
         with self.lock:
@@ -246,16 +338,27 @@ class App:
             self.limit(h)
             raise ApiError(HTTPStatus.UNAUTHORIZED, "server token required")
 
-    def require_vault(self, h: "Handler", vault_id: str) -> None:
+    def require_vault(self, h: "Handler", vault_id: str) -> str | None:
+        """Checks the vault token. Returns the successor's id if the vault
+        has moved (the caller decides what a moved vault may still do)."""
         if not VAULT_ID_RE.match(vault_id):
             raise ApiError(HTTPStatus.NOT_FOUND, "no such vault")
-        stored = self.store.auth_hash(vault_id)
+        found = self.store.auth_hash(vault_id)
+        stored = found[0] if found else None
         token = h.headers.get("X-MyTerm-Vault-Token", "")
         # Compare even when the vault is missing, so timing doesn't reveal which ids exist.
         ok = hmac.compare_digest(sha256_hex(token), stored or "0" * 64) and stored is not None
         if not ok:
             self.limit(h)
             raise ApiError(HTTPStatus.UNAUTHORIZED, "vault token rejected")
+        return found[1] if found else None
+
+    def device_header(self, h: "Handler") -> tuple[str | None, str | None]:
+        device = h.headers.get("X-MyTerm-Device", "")
+        if not DEVICE_RE.match(device):
+            return None, None
+        name = "".join(c for c in h.headers.get("X-MyTerm-Device-Name", "") if c.isprintable()).strip()
+        return device, name[:DEVICE_NAME_MAX]
 
     def limit(self, h: "Handler") -> None:
         if not self.limiter.allow(h.client_ip()):
@@ -297,7 +400,42 @@ class App:
         if len(parts) >= 3 and parts[:2] == ["v1", "vaults"]:
             vault_id = parts[2]
             rest = parts[3:]
-            self.require_vault(h, vault_id)
+            moved_to = self.require_vault(h, vault_id)
+
+            if rest == ["successor"] and method == "GET":
+                found = self.store.successor(vault_id) if moved_to else None
+                if found is None:
+                    raise ApiError(HTTPStatus.NOT_FOUND, "this vault has not moved")
+                return HTTPStatus.OK, found
+            if moved_to:
+                # Revoked: the data is gone. Point at the successor, whose
+                # key needs the master password.
+                raise ApiError(HTTPStatus.GONE, "vault moved: its key was changed to revoke a device", moved=True)
+
+            device, device_name = self.device_header(h)
+            if device:
+                self.store.touch_device(vault_id, device, device_name)
+
+            if rest == ["successor"] and method == "POST":
+                body = h.json_body()
+                new_id = str(body.get("vault_id", ""))
+                auth_hash = str(body.get("auth_hash", ""))
+                if not VAULT_ID_RE.match(new_id) or not HASH_RE.match(auth_hash) or new_id == vault_id:
+                    raise ApiError(HTTPStatus.BAD_REQUEST, "invalid vault_id or auth_hash")
+                self.store.move_vault(vault_id, new_id, auth_hash, validate_wrapped(body.get("wrapped")))
+                log.info("vault moved to a successor (device revoked)")
+                return HTTPStatus.CREATED, {"vault_id": new_id}
+
+            if rest == ["devices"] and method == "GET":
+                return HTTPStatus.OK, {"devices": self.store.devices(vault_id)}
+
+            if len(rest) == 2 and rest[0] == "devices" and method == "DELETE":
+                if not DEVICE_RE.match(rest[1]):
+                    raise ApiError(HTTPStatus.NOT_FOUND, "no such device")
+                if not self.store.forget_device(vault_id, rest[1]):
+                    raise ApiError(HTTPStatus.NOT_FOUND, "no such device")
+                log.info("device forgotten")
+                return HTTPStatus.OK, {"ok": True}
 
             if rest == ["records"] and method == "POST":
                 body = h.json_body()
@@ -381,7 +519,7 @@ class Handler(BaseHTTPRequestHandler):
             self._read_body()
             status, payload = self.app.handle(self, method)
         except ApiError as e:
-            status, payload = e.status, {"error": e.message}
+            status, payload = e.status, {"error": e.message, **e.extra}
         except ValueError:  # bad Content-Length
             self.close_connection = True
             status, payload = HTTPStatus.BAD_REQUEST, {"error": "bad request"}
