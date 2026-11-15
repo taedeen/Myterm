@@ -41,6 +41,24 @@ class TerminalSession extends ChangeNotifier {
 
   List<SuggestionDto> suggestions = const [];
 
+  /// Suggestion picked with Tab (keyboard), or null. Enter runs it.
+  int? selected;
+
+  /// Tab / Shift+Tab: moves the highlight through the suggestions.
+  void selectNext({bool back = false}) {
+    if (suggestions.isEmpty) return;
+    final n = suggestions.length;
+    final cur = selected;
+    selected = cur == null ? (back ? n - 1 : 0) : (cur + (back ? n - 1 : 1)) % n;
+    notifyListeners();
+  }
+
+  void clearSelection() {
+    if (selected == null) return;
+    selected = null;
+    notifyListeners();
+  }
+
   StreamSubscription<SessionEventDto>? _sub;
   bool _authTried = false;
 
@@ -176,6 +194,7 @@ class TerminalSession extends ChangeNotifier {
     final id = sessionId;
     if (id == null) return;
     suggestions = core.suggest(sessionId: id, limit: 6);
+    selected = null;
     notifyListeners();
   }
 
