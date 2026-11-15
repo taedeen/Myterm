@@ -16,7 +16,7 @@ set -euo pipefail
 
 REPO="taedeen/Myterm"
 ALIAS="github-myterm"
-BRANCH="${MYTERM_TOOLS_BRANCH:-dev}"          # main once pull request #1 is merged
+BRANCH="${MYTERM_TOOLS_BRANCH:-main}"
 TOOLS="$HOME/.local/share/myterm-tools"
 REMOTE="${MYTERM_TOOLS_REMOTE:-git@$ALIAS:$REPO.git}"   # override only for testing
 KEY="$HOME/.ssh/${ALIAS}_deploy"

@@ -140,9 +140,8 @@ To keep the newest builds on the server every hour (replaces `fetch-apk.sh`):
 
 - Docker runs through `sudo`. If your user is in the `docker` group,
   `export UPGRADE_SUDO=` skips it.
-- The scripts follow the Myterm repo's `dev` branch until pull request #1 is
-  merged; after that, set `MYTERM_TOOLS_BRANCH=main` for new bootstraps, and
-  on existing servers run
-  `git -C ~/.local/share/myterm-tools remote set-branches origin main && git -C ~/.local/share/myterm-tools fetch --depth 20 origin main && git -C ~/.local/share/myterm-tools checkout -B main origin/main`.
+- The scripts follow the Myterm repo's `main` branch (released versions).
+  `upgrade.sh --self-update` moves a copy set up from `dev` over to `main`.
+  `MYTERM_TOOLS_BRANCH=dev` follows the latest work instead.
 - Nothing runs on a timer unless you add the cron line yourself, so nothing
   changes on a server without you seeing it first.

@@ -297,6 +297,18 @@ self_update() {
   git -C "$tools" rev-parse --git-dir >/dev/null 2>&1 \
     || die "This copy of upgrade.sh isn't linked to GitHub. Run deploy/bootstrap.sh once to set that up."
   before="$(git -C "$tools" rev-parse --short HEAD)"
+  # Follow the released branch (main), also for copies set up from dev.
+  local branch="${MYTERM_TOOLS_BRANCH:-main}" cur
+  cur="$(git -C "$tools" rev-parse --abbrev-ref HEAD)"
+  if [ "$cur" != "$branch" ]; then
+    git -C "$tools" remote set-branches --add origin "$branch"
+    if git -C "$tools" fetch -q --depth 20 origin "$branch" 2>/dev/null; then
+      git -C "$tools" checkout -q -B "$branch" "origin/$branch"
+      bold "The scripts now follow the $branch branch (were on $cur)."
+    else
+      echo "Couldn't fetch the $branch branch; staying on $cur." >&2
+    fi
+  fi
   git -C "$tools" pull -q --ff-only || die "Couldn't update $tools (changed by hand? see git -C $tools status)"
   if [ "$before" = "$(git -C "$tools" rev-parse --short HEAD)" ]; then
     bold "upgrade.sh and deploy-apk.sh are up to date ($before)."

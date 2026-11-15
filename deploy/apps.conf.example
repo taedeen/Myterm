@@ -25,8 +25,8 @@ health  = log:core:MyJam {version} ready
 
 [myterm-sync]
 remote  = git@github-myterm:taedeen/Myterm.git
-# 'dev' until pull request #1 is merged; then change to main.
-branch  = dev
+# main = released versions; dev = the latest work.
+branch  = main
 dir     = ~/docker_volumes/myterm-sync
 subdir  = server
 backup  = server/.env server/data
