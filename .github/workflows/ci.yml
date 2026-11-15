@@ -144,9 +144,15 @@ jobs:
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           $version = (Select-String -Path apps/mobile/pubspec.yaml -Pattern '^version:\s*([0-9.]+)').Matches[0].Groups[1].Value
           $release = (Resolve-Path 'apps/mobile/build/windows/x64/runner/Release').Path
-          $signtool = (Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName -Descending | Select-Object -First 1).FullName
-          $sign = "`"$signtool`" sign /q /fd SHA256 /f `"${{ steps.cert.outputs.pfx }}`" /p ${{ steps.cert.outputs.password }} /tr http://timestamp.digicert.com /td SHA256 /d MyTerm `$f"
-          & $iscc /Q "/DAppVersion=$version" "/DSourceDir=$release" /DSIGN "/Smytermsign=$sign" packaging/windows/myterm.iss
+          # Inno Setup signs the installer and uninstaller through this helper. A
+          # .cmd on a path without spaces keeps quotes out of ISCC's arguments
+          # (PowerShell splits arguments with embedded quotes).
+          $env:SIGNTOOL = (Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName -Descending | Select-Object -First 1).FullName
+          $env:SIGN_PFX = '${{ steps.cert.outputs.pfx }}'
+          $env:SIGN_PASSWORD = '${{ steps.cert.outputs.password }}'
+          $helper = Join-Path $env:RUNNER_TEMP 'mytermsign.cmd'
+          Set-Content -Path $helper -Encoding ascii -Value '@"%SIGNTOOL%" sign /q /fd SHA256 /f "%SIGN_PFX%" /p %SIGN_PASSWORD% /tr http://timestamp.digicert.com /td SHA256 /d MyTerm %*'
+          & $iscc /Q "/DAppVersion=$version" "/DSourceDir=$release" /DSIGN "/Smytermsign=$helper `$f" packaging/windows/myterm.iss
           if ($LASTEXITCODE) { throw "ISCC failed ($LASTEXITCODE)" }
           "MYTERM_VERSION=$version" >> $env:GITHUB_ENV
       - name: Check signatures, install, run, uninstall
