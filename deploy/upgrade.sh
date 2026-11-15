@@ -6,6 +6,7 @@
 #   upgrade.sh myjam --force      rebuild and restart even if already up to date
 #   upgrade.sh --list             show the apps, their versions and whether anything is new
 #   upgrade.sh --setup NAME       first install of an app: deploy key, clone, first start
+#   upgrade.sh --self-update      update this script (and deploy-apk.sh) from GitHub
 #
 # The apps are listed in ~/.config/upgrade/apps.conf (one [section] per app; see the example
 # that comes with this script). Adding a future app is a new section there; this script
@@ -241,7 +242,7 @@ setup_app() {
 
   mkdir -p "$dir"
   git -C "$dir" init -q -b "$br"
-  git -C "$dir" remote add origin "$remote"
+  git -C "$dir" remote add -t "$br" origin "$remote"
   if [ -n "$sub" ]; then
     # Only the app's folder of a bigger repository.
     git -C "$dir" sparse-checkout set --cone "$sub"
@@ -287,6 +288,24 @@ list_apps() {
   done
 }
 
+# ------------------------------------------------------------------ self-update
+self_update() {
+  # bootstrap.sh links ~/bin/upgrade.sh into a checkout of the Myterm repo's deploy/ folder.
+  local real tools before
+  real="$(readlink -f "$0")"
+  tools="$(cd "$(dirname "$real")/.." && pwd)"
+  git -C "$tools" rev-parse --git-dir >/dev/null 2>&1 \
+    || die "This copy of upgrade.sh isn't linked to GitHub. Run deploy/bootstrap.sh once to set that up."
+  before="$(git -C "$tools" rev-parse --short HEAD)"
+  git -C "$tools" pull -q --ff-only || die "Couldn't update $tools (changed by hand? see git -C $tools status)"
+  if [ "$before" = "$(git -C "$tools" rev-parse --short HEAD)" ]; then
+    bold "upgrade.sh and deploy-apk.sh are up to date ($before)."
+  else
+    bold "Updated the scripts:"
+    git -C "$tools" log --oneline --no-decorate "$before..HEAD" -- deploy | sed 's/^/  /'
+  fi
+}
+
 # ------------------------------------------------------------------ main
 main() {
   local force=0 setup="" list=0 targets=() a
@@ -294,8 +313,9 @@ main() {
     case "$a" in
       --force) force=1 ;;
       --list) list=1 ;;
+      --self-update) self_update; exit 0 ;;
       --setup) setup=next ;;
-      -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+      -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
       -*) die "Unknown option $a (see --help)" ;;
       *) if [ "$setup" = next ]; then setup="$a"; else targets+=("$a"); fi ;;
     esac
