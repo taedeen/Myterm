@@ -43,6 +43,29 @@ enum Cmd {
         /// What this machine takes: full, certs (hosts and certificates, no stored passwords) or hosts
         #[arg(long)]
         scope: Option<String>,
+        /// Start a new vault on the server instead (when you have no MyTerm vault yet)
+        #[arg(long)]
+        create: bool,
+    },
+    /// Change a host's options
+    Set {
+        host: String,
+        /// Sign in with this device's MyTerm certificate (on/off)
+        #[arg(long)]
+        certificate: Option<OnOff>,
+        /// Keep the session running in tmux on the server (on/off)
+        #[arg(long)]
+        keep_session: Option<OnOff>,
+        /// Jump host (a host label), or "none"
+        #[arg(long)]
+        via: Option<String>,
+        #[arg(long)]
+        user: Option<String>,
+        #[arg(long)]
+        port: Option<u16>,
+        /// Comma-separated tags (replaces the existing ones)
+        #[arg(long)]
+        tags: Option<String>,
     },
     /// Unlock and keep the vault unlocked for a while (default 15 minutes idle)
     Unlock {
@@ -118,6 +141,12 @@ enum Cmd {
     Completions { shell: clap_complete::Shell },
     #[command(name = "__keyholder", hide = true)]
     KeyHolder { device: String, idle: u64 },
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum OnOff {
+    On,
+    Off,
 }
 
 fn main() -> ExitCode {
@@ -238,7 +267,7 @@ fn real_main(cli: Cli) -> Result<u8> {
             let Some(host) = picker::pick(&hosts)? else { return Ok(0) };
             connect(&mut store, &host, None, false)
         }
-        Some(Cmd::Join { url, name, scope }) => {
+        Some(Cmd::Join { url, name, scope, create }) => {
             if store.has_vault() && !prompt::yes("This machine has already joined a vault. Join again?", false)? {
                 return Ok(0);
             }
@@ -264,7 +293,17 @@ fn real_main(cli: Cli) -> Result<u8> {
             };
             let password = prompt::secret("Master password: ")?;
             store.meta.insert("scope".into(), json!(scope.as_str()));
-            let mk = sync::join(&mut store, &url, &token, &name, &password)?;
+            let mk = if create {
+                if password.chars().count() < 12 {
+                    bail!("use a master password of at least 12 characters");
+                }
+                if prompt::secret("Master password again: ")? != password {
+                    bail!("the passwords don't match");
+                }
+                sync::create(&mut store, &url, &token, &name, &password)?
+            } else {
+                sync::join(&mut store, &url, &token, &name, &password)?
+            };
             let summary = sync::sync_now(&mut store)?;
             let _ = keyholder::start(&store.device_id(), &mk, 15 * 60);
             println!("Joined vault {name} as {} ({}). Sync: {summary}.", store.device_name(), scope.as_str());
@@ -275,6 +314,36 @@ fn real_main(cli: Cli) -> Result<u8> {
                     Err(e) => println!("No SSH certificate: {e}"),
                 }
             }
+            Ok(0)
+        }
+        Some(Cmd::Set { host, certificate, keep_session, via, user, port, tags }) => {
+            unlock(&store)?;
+            let hosts = store.engine.list_hosts();
+            let mut h = find_host(&hosts, &host)?;
+            let on = |v: OnOff| matches!(v, OnOff::On);
+            if let Some(v) = certificate {
+                h.use_certificate = Some(on(v));
+            }
+            if let Some(v) = keep_session {
+                h.persistent = Some(on(v));
+            }
+            if let Some(v) = via {
+                h.jump_chain = if v == "none" { vec![] } else { vec![find_host(&hosts, &v)?.id] };
+            }
+            if let Some(u) = user {
+                h.username = u;
+            }
+            if let Some(p) = port {
+                h.port = Some(p);
+            }
+            if let Some(t) = tags {
+                h.tags = t.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect();
+            }
+            let label = h.label.clone();
+            store.engine.upsert_host(h)?;
+            store.save()?;
+            sync_quietly(&mut store);
+            println!("Updated {label}.");
             Ok(0)
         }
         Some(Cmd::Unlock { minutes }) => {

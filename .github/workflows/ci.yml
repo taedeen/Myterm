@@ -108,6 +108,13 @@ jobs:
           [ "$(stat -c %a "$MYTERM_HOME/meta.json")" = 600 ]
           if $b hosts 2>err.txt; then echo "hosts should refuse before joining"; exit 1; fi
           grep -q "myterm join" err.txt
+      - name: End-to-end (sync server, two devices, sshd trusting MyTerm certificates)
+        if: matrix.arch == 'x86_64'
+        run: |
+          sudo apt-get install -y -qq openssh-server tmux > /dev/null
+          sudo systemctl start ssh
+          pip install -q pexpect
+          python3 crates/cli/tests/e2e.py target/release/myterm
       - name: Package
         run: |
           v="$(sed -n 's/^version: *\([0-9.]*\).*/\1/p' apps/mobile/pubspec.yaml)"
