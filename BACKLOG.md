@@ -43,6 +43,15 @@ Home Assistant actions, TPM keys on Windows, iOS.
 - **Home Assistant actions:** run a host's snippet from an HA dashboard or
   automation through the sync server.
 
+## Build and release
+- **Sync server address from a secret.** Replace the hard-coded
+  `https://myterm.example.com` with a GitHub secret `MYTERM_SYNC_SERVER`,
+  built into the apps and `myterm` at release time; if the secret is blank,
+  default to `https://myterm.example.com`. Today it's in
+  `apps/mobile/lib/src/sync_service.dart` (`defaultUrl`),
+  `crates/cli/src/sync.rs` (`DEFAULT_URL`) and the docs (server README,
+  user guide). The address stays editable in Sync setup and `myterm join`.
+
 ## Platforms
 - ✅ 0.4.0 ⭐ **Linux command line (`myterm`).** One Rust binary on the shared crates:
   `myterm ssh` with autocomplete and the password key, `myterm agent` plus a
