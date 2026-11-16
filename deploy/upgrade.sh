@@ -7,6 +7,8 @@
 #   upgrade.sh myjam --force      rebuild and restart even if already up to date
 #   upgrade.sh --list             show the apps, their versions and whether anything is new
 #   upgrade.sh --setup NAME       first install of an app: deploy key, clone, first start
+#   upgrade.sh --add NAME         copy an app's ready-made section from apps.conf.example into
+#                                 your apps.conf, then install it (e.g. --add myterm-cli)
 #   upgrade.sh --self-update      update this script (and deploy-apk.sh) from GitHub
 #
 # The apps are listed in ~/.config/upgrade/apps.conf (one [section] per app; see the example
@@ -263,7 +265,7 @@ upgrade_release() {   # upgrade_release APP FORCE
   asset="$(need "$app" asset)"; asset="${asset//\{version\}/$ver}"; asset="${asset//\{arch\}/$arch}"
   url="$(release_field "$rel" asset "$asset")"
   sums="$(release_field "$rel" asset SHA256SUMS.txt)"
-  [ -n "$url" ] || { warn "  release $tag has no $asset"; return 1; }
+  [ -n "$url" ] || { warn "  the latest release ($tag) has no $asset yet"; return 1; }
   tmp="$(mktemp -d)"
   note "downloading $asset"
   gh_curl "$url" application/octet-stream > "$tmp/$asset" || { rm -rf "$tmp"; warn "  download failed"; return 1; }
@@ -419,22 +421,68 @@ self_update() {
     bold "Updated the scripts:"
     git -C "$tools" log --oneline --no-decorate "$before..HEAD" -- deploy | sed 's/^/  /'
   fi
+  mention_new_apps
+}
+
+# ------------------------------------------------------------------ ready-made apps
+example_file() { printf '%s/apps.conf.example' "$(dirname "$(readlink -f "$0")")"; }
+
+example_apps() {   # section names in apps.conf.example
+  local f; f="$(example_file)"
+  [ -f "$f" ] && sed -n 's/^\[\([A-Za-z0-9_.-]*\)\][[:space:]]*$/\1/p' "$f"
+}
+
+configured_apps() {
+  [ -f "$CONF" ] && sed -n 's/^\[\([A-Za-z0-9_.-]*\)\][[:space:]]*$/\1/p' "$CONF"
+}
+
+# add_app NAME: appends [NAME] from apps.conf.example to apps.conf (once), then installs it.
+add_app() {
+  local name="$1" f
+  f="$(example_file)"
+  [ -f "$f" ] || die "No apps.conf.example next to this script."
+  example_apps | grep -qx "$name" || die "apps.conf.example has no [$name]. Ready-made apps: $(example_apps | tr '\n' ' ')"
+  mkdir -p "$(dirname "$CONF")"
+  if configured_apps | grep -qx "$name"; then
+    note "[$name] is already in $CONF"
+  else
+    { echo; awk -v s="[$name]" '
+        $0 == s { on = 1; print; next }
+        on && /^\[/ { exit }
+        on && /^# Example for a future app/ { exit }
+        on { print }' "$f" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}'; } >> "$CONF"
+    bold "Added [$name] to $CONF"
+  fi
+  load_conf
+  setup_app "$name"
+  exit 0
+}
+
+# After a self-update: ready-made apps in the example that aren't in apps.conf yet.
+mention_new_apps() {
+  local missing
+  missing="$(comm -23 <(example_apps | sort) <(configured_apps | sort) | tr '\n' ' ')"
+  [ -n "${missing// /}" ] && note "Ready-made apps you haven't added: $missing(add one with: upgrade.sh --add NAME)"
+  return 0
 }
 
 # ------------------------------------------------------------------ main
 main() {
-  local force=0 setup="" list=0 targets=() a
+  local force=0 setup="" add="" list=0 targets=() a
   for a in "$@"; do
     case "$a" in
       --force) force=1 ;;
       --list) list=1 ;;
       --self-update) self_update; exit 0 ;;
       --setup) setup=next ;;
-      -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+      --add) add=next ;;
+      -h|--help) sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
       -*) die "Unknown option $a (see --help)" ;;
-      *) if [ "$setup" = next ]; then setup="$a"; else targets+=("$a"); fi ;;
+      *) if [ "$setup" = next ]; then setup="$a"; elif [ "$add" = next ]; then add="$a"; else targets+=("$a"); fi ;;
     esac
   done
+  if [ "$add" = next ]; then die "--add needs an app name: $(example_apps | tr '\n' ' ')"; fi
+  if [ -n "$add" ]; then add_app "$add"; fi
   load_conf
 
   if [ "$setup" = next ]; then die "--setup needs an app name: ${APPS[*]}"; fi

@@ -95,7 +95,8 @@ GitHub releases rather than Docker apps. The `[myterm-cli]` section in
 `apps.conf.example` installs the Linux command line:
 
 ```
-upgrade.sh --setup myterm-cli     # downloads the build for this machine (x86_64 or aarch64)
+upgrade.sh --self-update          # get the newest scripts
+upgrade.sh --add myterm-cli       # adds [myterm-cli] to apps.conf and installs it
 myterm join                       # then join your vault
 ```
 
