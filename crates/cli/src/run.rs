@@ -3,7 +3,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
 use myterm_ffi::api::{HostDto, SessionEventDto};
 use tokio::sync::{mpsc, Semaphore};
 
