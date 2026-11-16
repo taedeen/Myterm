@@ -126,7 +126,8 @@ Future<TerminalSession> connect(WidgetTester t, AppState state, HostDto h, {Stri
   await waitFor(t, find.text('Trust'));
   if (hostKeyShot != null) await shot(t, hostKeyShot);
   await t.tap(find.text('Trust'));
-  await until(t, () => s.isLive, () => 'session to ${h.label} (status: ${s.status})');
+  // Windows creates the user's profile on the first login, which is slow.
+  await until(t, () => s.isLive, () => 'session to ${h.label} (status: ${s.status})', seconds: 90);
   await settle(t, 1500);
   return s;
 }
@@ -230,10 +231,12 @@ void main() {
       await settle(t, 600);
     } else {
       // A second host, side by side.
+      // Same SSH server as server1 here, so its host key is already trusted.
       final s2 = state.openSession(server2);
-      await waitFor(t, find.text('Trust'));
-      await t.tap(find.text('Trust'));
-      await until(t, () => s2.isLive, () => 'session to server2 (status: ${s2.status})');
+      await until(t, () => s2.isLive || find.text('Trust').evaluate().isNotEmpty,
+          () => 'session to server2 (status: ${s2.status})', seconds: 90);
+      if (!s2.isLive) await t.tap(find.text('Trust'));
+      await until(t, () => s2.isLive, () => 'session to server2 (status: ${s2.status})', seconds: 90);
       await t.tap(find.byTooltip('Split: side by side'));
       await settle(t, 1500);
       await run(t, s2, 'whoami');
