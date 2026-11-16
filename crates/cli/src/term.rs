@@ -160,22 +160,11 @@ pub async fn interactive(store: &Store, host: &HostDto, tmux_name: Option<String
     prepare_certificate(store, host);
     let tmux = tmux_name.as_deref().map(myterm_ffi::api::tmux_command);
 
-    // One stdin reader for the whole run (reconnects included).
+    // One stdin reader for the whole run (reconnects included), started
+    // once the first session is up: before that, host key questions read
+    // the terminal themselves.
     let (in_tx, mut in_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-    tokio::spawn(async move {
-        let mut stdin = tokio::io::stdin();
-        let mut buf = [0u8; 4096];
-        loop {
-            match stdin.read(&mut buf).await {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    if in_tx.send(buf[..n].to_vec()).is_err() {
-                        break;
-                    }
-                }
-            }
-        }
-    });
+    let mut in_tx = Some(in_tx);
     let mut winch = signal(SignalKind::window_change())?;
 
     let mut attempt = 0u32;
@@ -212,6 +201,22 @@ pub async fn interactive(store: &Store, host: &HostDto, tmux_name: Option<String
                 None => break None,
             }
         };
+        if let (Some(_), Some(tx)) = (id, in_tx.take()) {
+            tokio::spawn(async move {
+                let mut stdin = tokio::io::stdin();
+                let mut buf = [0u8; 4096];
+                loop {
+                    match stdin.read(&mut buf).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            if tx.send(buf[..n].to_vec()).is_err() {
+                                break;
+                            }
+                        }
+                    }
+                }
+            });
+        }
         let Some(id) = id else {
             if persistent && attempt > 0 && attempt < 30 {
                 attempt += 1;
