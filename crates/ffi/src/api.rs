@@ -17,7 +17,9 @@ use myterm_core::completion::{self, CompletionInput, Snippet};
 use myterm_core::history::{HistoryStore, RecordContext};
 use myterm_core::inject::{ConfirmPolicy, CredentialMeta, InjectDecision, Refusal, SecretBuf};
 use myterm_core::keybar::{self, KeyAction};
-use myterm_core::knownhosts::{KnownHost, Verdict};
+use myterm_core::knownhosts::KnownHost;
+#[cfg(feature = "flutter")]
+use myterm_core::knownhosts::Verdict;
 use myterm_core::model::{self, Group, Host, Overrides};
 use myterm_core::session::Session;
 use myterm_core::sha256;
@@ -472,7 +474,7 @@ struct DartSigner {
     public: Vec<u8>,
     protection: Protection,
     key_id: String,
-    sign: Arc<dyn Fn(String, Vec<u8>) -> DartFnFuture<Vec<u8>> + Send + Sync>,
+    sign: SignFn,
 }
 
 #[async_trait::async_trait]
@@ -784,7 +786,7 @@ impl MyTerm {
         for sealed in records {
             let plain = st.vault.open_blob("sync-record", &sealed)?;
             for r in codec::decode_records(&plain)? {
-                if skip_kinds.iter().any(|k| *k == r.kind) {
+                if skip_kinds.contains(&r.kind) {
                     continue;
                 }
                 if st.vault.merge_remote(&r) != myterm_core::sync::Causality::Equal {

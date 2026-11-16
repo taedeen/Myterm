@@ -88,6 +88,23 @@ To keep the old habit in MyJam's folder:
 printf '#!/bin/sh\nexec "$HOME/bin/upgrade.sh" myjam "$@"\n' > ~/docker_volumes/MyJam/upgrade.sh
 ```
 
+### Release binaries (the myterm command line)
+
+Apps with `kind = release` in `apps.conf` are programs from a repository's
+GitHub releases rather than Docker apps. The `[myterm-cli]` section in
+`apps.conf.example` installs the Linux command line:
+
+```
+upgrade.sh --setup myterm-cli     # downloads the build for this machine (x86_64 or aarch64)
+myterm join                       # then join your vault
+```
+
+It uses the same read-only GitHub token as deploy-apk.sh, checks the download
+against the release's `SHA256SUMS.txt`, unpacks it to
+`~/.local/share/myterm-cli/<version>` (keeping the previous version) and links
+`~/bin/myterm`. A plain `upgrade.sh` updates it with everything else. A Raspberry
+Pi without Docker can list only `[myterm-cli]`.
+
 ## deploy-apk.sh
 
 ```sh
