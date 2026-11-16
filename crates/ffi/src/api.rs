@@ -10,7 +10,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use flutter_rust_bridge::{frb, DartFnFuture};
+use flutter_rust_bridge::frb;
+#[cfg(feature = "flutter")]
+use flutter_rust_bridge::DartFnFuture;
 use myterm_core::audit::{AuditKind, AuditLog};
 use myterm_core::codec;
 use myterm_core::completion::{self, CompletionInput, Snippet};
