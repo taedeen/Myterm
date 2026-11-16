@@ -58,10 +58,10 @@ Future<void> waitFor(WidgetTester t, Finder f, {int seconds = 30}) async {
   }
 }
 
-Future<void> until(WidgetTester t, bool Function() ok, String what, {int seconds = 30}) async {
+Future<void> until(WidgetTester t, bool Function() ok, String Function() what, {int seconds = 30}) async {
   final end = DateTime.now().add(Duration(seconds: seconds));
   while (!ok()) {
-    if (DateTime.now().isAfter(end)) throw TestFailure('Timed out waiting for $what');
+    if (DateTime.now().isAfter(end)) throw TestFailure('Timed out waiting for ${what()}');
     await t.pump(const Duration(milliseconds: 200));
   }
 }
@@ -126,7 +126,7 @@ Future<TerminalSession> connect(WidgetTester t, AppState state, HostDto h, {Stri
   await waitFor(t, find.text('Trust'));
   if (hostKeyShot != null) await shot(t, hostKeyShot);
   await t.tap(find.text('Trust'));
-  await until(t, () => s.isLive, 'session to ${h.label}');
+  await until(t, () => s.isLive, () => 'session to ${h.label} (status: ${s.status})');
   await settle(t, 1500);
   return s;
 }
@@ -140,6 +140,8 @@ void main() {
       t.view.physicalSize = const Size(1280, 800);
       t.view.devicePixelRatio = 1.0;
     }
+    // Hand over whatever was taken, even if a later step fails.
+    addTearDown(() => binding.reportData = {'shots': shots});
     final state = AppState();
     await state.init();
     await t.pumpWidget(RepaintBoundary(key: shotKey, child: MyTermApp(state: state)));
@@ -151,7 +153,7 @@ void main() {
     await t.enterText(fields.at(1), 'correct horse battery staple');
     if (phone) await shot(t, 'first-run');
     await t.tap(find.text('Create vault'));
-    await until(t, () => state.unlocked, 'vault to unlock');
+    await until(t, () => state.unlocked, () => 'vault to unlock');
     await settle(t, 2500); // the "biometric unlock unavailable" note goes
 
     // ------------------------------------------------ demo vault
@@ -231,7 +233,7 @@ void main() {
       final s2 = state.openSession(server2);
       await waitFor(t, find.text('Trust'));
       await t.tap(find.text('Trust'));
-      await until(t, () => s2.isLive, 'session to server2');
+      await until(t, () => s2.isLive, () => 'session to server2 (status: ${s2.status})');
       await t.tap(find.byTooltip('Split: side by side'));
       await settle(t, 1500);
       await run(t, s2, 'whoami');
@@ -250,7 +252,5 @@ void main() {
     await t.tap(find.byIcon(Icons.settings));
     await settle(t);
     await shot(t, 'settings');
-
-    binding.reportData = {'shots': shots};
   }, timeout: const Timeout(Duration(minutes: 10)));
 }

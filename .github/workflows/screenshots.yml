@@ -24,6 +24,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
+      - name: Free disk space (the emulator needs ~8 GB)
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /usr/local/.ghcup /usr/share/swift /opt/hostedtoolcache/CodeQL
+          df -h /
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
@@ -43,7 +47,10 @@ jobs:
       - name: Prepare Android build (emulator only)
         env:
           MYTERM_ANDROID_TARGETS: x86_64
-        run: apps/mobile/tool/prepare_android.sh
+        run: |
+          apps/mobile/tool/prepare_android.sh
+          rm -rf target   # the Rust library is in jniLibs now
+          df -h /
       - name: Demo SSH server (users demo = server1, ops = server2)
         run: |
           sudo apt-get install -y -qq openssh-server > /dev/null
@@ -80,6 +87,7 @@ jobs:
           profile: pixel_6
           ram-size: 4096M
           emulator-boot-timeout: 1200
+          disk-size: 4096M
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           script: cd apps/mobile && flutter drive --driver=test_driver/integration_test.dart --target=integration_test/screenshots_test.dart -d emulator-5554 --dart-define=DEMO_SSH_HOST=10.0.2.2 --dart-define=DEMO_SYNC_URL=http://10.0.2.2:7341 --dart-define=DEMO_SYNC_TOKEN=$DEMO_SYNC_TOKEN --dart-define=DEMO_PASSWORD=$DEMO_PASSWORD
@@ -137,8 +145,22 @@ jobs:
           esac
           '@
           Add-Content -Path 'C:\Program Files\Git\etc\bash.bashrc' -Value $rc
+          Add-Content -Path 'C:\ProgramData\ssh\sshd_config' -Value "`nSyslogFacility LOCAL0`nLogLevel VERBOSE"
           Start-Service sshd
+          Restart-Service sshd
           Get-Service sshd
+      - name: Check a demo login
+        continue-on-error: true
+        run: |
+          pip install -q paramiko
+          python - <<'EOF'
+          import os, paramiko
+          c = paramiko.SSHClient(); c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+          c.connect('127.0.0.1', username='demo', password=os.environ['DEMO_PASSWORD'], look_for_keys=False, allow_agent=False)
+          _, out, err = c.exec_command('whoami; echo $0; ls /')
+          print(out.read().decode(), err.read().decode())
+          ch = c.invoke_shell(); import time; time.sleep(3); ch.send('echo hello\r'); time.sleep(2); print(repr(ch.recv(4096)))
+          EOF
       - name: Screenshots
         run: |
           mkdir -p "$RUNNER_TEMP/sync"
@@ -151,9 +173,11 @@ jobs:
           flutter drive -d windows --driver=test_driver/integration_test.dart --target=integration_test/screenshots_test.dart \
             --dart-define=DEMO_SSH_HOST=127.0.0.1 --dart-define=DEMO_SYNC_URL=http://127.0.0.1:7341 \
             --dart-define=DEMO_SYNC_TOKEN="$DEMO_SYNC_TOKEN" --dart-define=DEMO_PASSWORD="$DEMO_PASSWORD"
-      - name: Sync server log
+      - name: Sync server and sshd logs
         if: always()
-        run: cat "$RUNNER_TEMP/sync/log.txt" || true
+        run: |
+          cat "$RUNNER_TEMP/sync/log.txt" || true
+          tail -50 /c/ProgramData/ssh/logs/sshd.log || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
