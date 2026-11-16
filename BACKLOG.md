@@ -44,12 +44,15 @@ Home Assistant actions, TPM keys on Windows, iOS.
   automation through the sync server.
 
 ## Platforms
-- ⭐ **Linux command line (`myterm`).** One Rust binary on the shared crates:
+- ✅ 0.4.0 ⭐ **Linux command line (`myterm`).** One Rust binary on the shared crates:
   `myterm ssh` with autocomplete and the password key, `myterm agent` plus a
   generated `~/.ssh/config` so plain ssh/scp/rsync/git use MyTerm's keys,
   certificates and jump hosts, parallel `run` across tagged hosts, per-device
   sync scopes (servers get hosts and certificates, not passwords). Design:
   "MyTerm: Backlog review and Linux command-line design".
+  Still to do from that design: `myterm agent` + `ssh-config --install`
+  (plain ssh/scp/git using MyTerm keys), `known-hosts --export`, a `.deb`,
+  moving the apps onto the Rust sync client.
 - iOS app, if needed. (Linux desktop app and Mosh dropped for now: the
   command line and tmux reattach cover most of their value.)
 - Android home-screen widget for favourite hosts; external keyboard and mouse

@@ -370,7 +370,26 @@ pub async fn open_shell(
                     Some(ChannelMsg::Data { data }) => { let _ = events.send(Event::Output(data.to_vec())); }
                     Some(ChannelMsg::ExtendedData { data, .. }) => { let _ = events.send(Event::Output(data.to_vec())); }
                     Some(ChannelMsg::ExitStatus { exit_status }) => { let _ = events.send(Event::Exit(Some(exit_status))); }
-                    Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => break,
+                    Some(ChannelMsg::Eof) => {
+                        // OpenSSH sends EOF, then the exit status, then Close:
+                        // keep reading briefly so the exit status isn't lost
+                        // (it tells a finished session from a dropped one).
+                        let wait = tokio::time::sleep(std::time::Duration::from_secs(3));
+                        tokio::pin!(wait);
+                        loop {
+                            tokio::select! {
+                                m = channel.wait() => match m {
+                                    Some(ChannelMsg::ExitStatus { exit_status }) => { let _ = events.send(Event::Exit(Some(exit_status))); }
+                                    Some(ChannelMsg::Data { data }) | Some(ChannelMsg::ExtendedData { data, .. }) => { let _ = events.send(Event::Output(data.to_vec())); }
+                                    Some(ChannelMsg::Close) | None => break,
+                                    Some(_) => {}
+                                },
+                                _ = &mut wait => break,
+                            }
+                        }
+                        break;
+                    }
+                    Some(ChannelMsg::Close) | None => break,
                     Some(_) => {}
                 },
                 cmd = rx.recv() => match cmd {
