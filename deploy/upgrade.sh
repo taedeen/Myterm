@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# upgrade.sh: install and upgrade server1's Docker apps from their GitHub repositories.
+# upgrade.sh: install and upgrade server1's apps from their GitHub repositories: Docker apps
+# (from git) and release binaries such as the myterm command line.
 #
 #   upgrade.sh                    upgrade every app in the list (only those with something new)
 #   upgrade.sh myjam              upgrade one app
@@ -202,6 +203,96 @@ upgrade_app() {
   return 1
 }
 
+# ------------------------------------------------------------------ release binaries
+# Apps with `kind = release` are binaries from a repository's GitHub releases
+# (e.g. the myterm command line), not Docker apps. They are downloaded with the
+# read-only GitHub token deploy-apk.sh uses, checked against the release's
+# SHA256SUMS.txt, unpacked to dir/<version>, and linked to `install`.
+GH_TOKEN_FILE="${APK_TOKEN_FILE:-$HOME/.config/apk/github.token}"
+GH_API="${UPGRADE_GITHUB_API:-https://api.github.com}"
+
+is_release() { [ "$(get "$1" kind)" = release ]; }
+
+gh_token() {
+  [ -f "$GH_TOKEN_FILE" ] || die "No GitHub token at $GH_TOKEN_FILE (the same one deploy-apk.sh uses; bootstrap.sh can add it)."
+  tr -d '[:space:]' < "$GH_TOKEN_FILE"
+}
+
+gh_curl() {   # gh_curl URL [ACCEPT] -> body on stdout
+  curl -fsSL --retry 3 -H "Authorization: Bearer $(gh_token)" -H "Accept: ${2:-application/vnd.github+json}" "$1"
+}
+
+latest_release() {   # latest_release REPO -> JSON of the latest release
+  gh_curl "$GH_API/repos/$1/releases/latest"
+}
+
+# release_field JSON FIELD [ASSET] -> tag (FIELD=tag) or an asset's API url (FIELD=asset)
+release_field() {
+  python3 -c '
+import json, sys
+r = json.loads(sys.argv[1])
+if sys.argv[2] == "tag":
+    print(r.get("tag_name", ""))
+else:
+    for a in r.get("assets", []):
+        if a["name"] == sys.argv[3]:
+            print(a["url"])
+' "$1" "$2" "${3-}"
+}
+
+release_installed() {   # version installed for APP, or nothing
+  local f; f="$(app_dir "$1")/current/VERSION"
+  [ -f "$f" ] && cat "$f" || true
+}
+
+upgrade_release() {   # upgrade_release APP FORCE
+  local app="$1" force="$2" repo dir rel tag ver have arch asset url sums tmp unpacked bin target
+  repo="$(need "$app" repo)"; dir="$(app_dir "$app")"
+  bold "== $app"
+  have="$(release_installed "$app")"
+  note "installed: ${have:-none}; checking $repo releases…"
+  rel="$(latest_release "$repo")" || { warn "  couldn't read $repo's releases (token, network?)"; return 1; }
+  tag="$(release_field "$rel" tag)"; ver="${tag#v}"
+  [ -n "$ver" ] || { warn "  $repo has no release yet"; return 1; }
+  if [ "$ver" = "$have" ] && [ "$force" != 1 ]; then note "up to date ($ver)"; return 0; fi
+  case "$(uname -m)" in
+    x86_64|amd64) arch=x86_64 ;;
+    aarch64|arm64) arch=aarch64 ;;
+    *) warn "  no $app build for $(uname -m)"; return 1 ;;
+  esac
+  asset="$(need "$app" asset)"; asset="${asset//\{version\}/$ver}"; asset="${asset//\{arch\}/$arch}"
+  url="$(release_field "$rel" asset "$asset")"
+  sums="$(release_field "$rel" asset SHA256SUMS.txt)"
+  [ -n "$url" ] || { warn "  release $tag has no $asset"; return 1; }
+  tmp="$(mktemp -d)"
+  note "downloading $asset"
+  gh_curl "$url" application/octet-stream > "$tmp/$asset" || { rm -rf "$tmp"; warn "  download failed"; return 1; }
+  if [ -n "$sums" ]; then
+    gh_curl "$sums" application/octet-stream > "$tmp/SHA256SUMS.txt"
+    (cd "$tmp" && grep -E "  \*?$asset\$" SHA256SUMS.txt | sha256sum -c --quiet -) \
+      || { rm -rf "$tmp"; warn "  $asset doesn't match the release's SHA256SUMS.txt: not installed"; return 1; }
+    note "checksum OK"
+  else
+    warn "  release has no SHA256SUMS.txt; installing without a checksum check"
+  fi
+  mkdir -p "$dir/$ver"
+  tar -xzf "$tmp/$asset" -C "$dir/$ver"
+  rm -rf "$tmp"
+  echo "$ver" > "$dir/$ver/VERSION"
+  ln -sfn "$dir/$ver" "$dir/current"
+  bin="$(get "$app" binary "$app")"
+  unpacked="$(find "$dir/current/" -maxdepth 2 -type f -name "$bin" -perm -u+x | head -n 1)"
+  [ -n "$unpacked" ] || { warn "  $asset has no $bin"; return 1; }
+  target="$(get "$app" install "$HOME/bin/$bin")"
+  mkdir -p "$(dirname "$target")"
+  ln -sfn "$unpacked" "$target"
+  # Keep the two newest versions to go back to.
+  ls -1d "$dir"/[0-9]* 2>/dev/null | sort -V | head -n -2 | while read -r old; do rm -rf "$old"; done
+  bold "$app $ver installed: $target"
+  [ -n "$have" ] && note "previous: $have (go back: ln -sfn $dir/$have $dir/current)"
+  return 0
+}
+
 # ------------------------------------------------------------------ first install
 # `ssh -T` to GitHub always exits 1 (no shell access), even when the key works, so
 # read its reply instead of its exit status (with pipefail, `ssh | grep` would fail).
@@ -212,6 +303,7 @@ github_ok() { [[ "$(github_reply "$1")" == *"successfully authenticated"* ]]; }
 
 setup_app() {
   local app="$1" dir remote br sub repo key alias since
+  if is_release "$app"; then upgrade_release "$app" 1; return; fi
   dir="$(app_dir "$app")"; remote="$(need "$app" remote)"; br="$(branch "$app")"; sub="$(get "$app" subdir)"
   bold "== Setting up $app in $dir"
   [ -e "$dir/.git" ] && die "$dir is already a Git checkout. Use: $0 $app"
@@ -274,6 +366,17 @@ list_apps() {
   printf '%-14s %-12s %-10s %s\n' APP VERSION BRANCH STATUS
   for app in "${APPS[@]}"; do
     dir="$(app_dir "$app")"; br="$(branch "$app")"
+    if is_release "$app"; then
+      local have tag
+      have="$(release_installed "$app")"
+      tag="$(release_field "$(latest_release "$(need "$app" repo)" 2>/dev/null || echo '{}')" tag)"
+      if [ -z "$have" ]; then n="not installed (--setup $app)"
+      elif [ -z "$tag" ]; then n="can't reach GitHub"
+      elif [ "v$have" = "$tag" ]; then n="up to date"
+      else n="$tag available"; fi
+      printf '%-14s %-12s %-10s %s\n' "$app" "${have:--}" release "$n"
+      continue
+    fi
     if [ ! -d "$dir/.git" ]; then
       printf '%-14s %-12s %-10s %s\n' "$app" - "$br" "not installed (--setup $app)"
       continue
@@ -345,9 +448,17 @@ main() {
   local failed=() ok=0
   for a in "${targets[@]}"; do
     [ -n "${CFG[$a.dir]-}" ] || die "No [$a] in $CONF (apps: ${APPS[*]})"
+    if is_release "$a"; then
+      if (upgrade_release "$a" "$force"); then ok=$((ok + 1)); else failed+=("$a"); fi
+      continue
+    fi
     if (upgrade_app "$a" "$force"); then ok=$((ok + 1)); else failed+=("$a"); fi
   done
-  $SUDO docker image prune -f >/dev/null 2>&1 || true    # tidy unused image layers
+  local docker_apps=0
+  for a in "${targets[@]}"; do is_release "$a" || docker_apps=1; done
+  if [ "$docker_apps" = 1 ] && command -v docker >/dev/null; then
+    $SUDO docker image prune -f >/dev/null 2>&1 || true    # tidy unused image layers
+  fi
   if [ "${#failed[@]}" -gt 0 ]; then
     die "Not upgraded: ${failed[*]} (details above)."
   fi

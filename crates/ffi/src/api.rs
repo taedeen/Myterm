@@ -10,14 +10,18 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use flutter_rust_bridge::{frb, DartFnFuture};
+use flutter_rust_bridge::frb;
+#[cfg(feature = "flutter")]
+use flutter_rust_bridge::DartFnFuture;
 use myterm_core::audit::{AuditKind, AuditLog};
 use myterm_core::codec;
 use myterm_core::completion::{self, CompletionInput, Snippet};
 use myterm_core::history::{HistoryStore, RecordContext};
 use myterm_core::inject::{ConfirmPolicy, CredentialMeta, InjectDecision, Refusal, SecretBuf};
 use myterm_core::keybar::{self, KeyAction};
-use myterm_core::knownhosts::{KnownHost, Verdict};
+use myterm_core::knownhosts::KnownHost;
+#[cfg(feature = "flutter")]
+use myterm_core::knownhosts::Verdict;
 use myterm_core::model::{self, Group, Host, Overrides};
 use myterm_core::session::Session;
 use myterm_core::sha256;
@@ -28,7 +32,9 @@ use myterm_vault::{self as vault, KdfParams, MasterKey, Vault};
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 
+#[cfg(feature = "flutter")]
 use crate::frb_generated::StreamSink;
+use crate::native::{EventFn, SignFn};
 
 fn rt() -> &'static Runtime {
     static RT: OnceLock<Runtime> = OnceLock::new();
@@ -470,7 +476,7 @@ struct DartSigner {
     public: Vec<u8>,
     protection: Protection,
     key_id: String,
-    sign: Arc<dyn Fn(String, Vec<u8>) -> DartFnFuture<Vec<u8>> + Send + Sync>,
+    sign: SignFn,
 }
 
 #[async_trait::async_trait]
@@ -491,8 +497,10 @@ impl AsyncDerSigner for DartSigner {
     }
 }
 
+#[cfg(feature = "flutter")]
 struct DartPrompt(Arc<dyn Fn(String, u16, String, String) -> DartFnFuture<bool> + Send + Sync>);
 
+#[cfg(feature = "flutter")]
 #[async_trait::async_trait]
 impl HostKeyPrompt for DartPrompt {
     async fn confirm(&self, host: &str, port: u16, verdict: &Verdict) -> bool {
@@ -769,11 +777,20 @@ impl MyTerm {
     /// Merges records pulled from the sync server (other devices' copies).
     /// Returns how many records changed locally.
     pub fn sync_apply(&self, records: Vec<Vec<u8>>) -> anyhow::Result<u32> {
+        self.sync_apply_scoped(records, Vec::new())
+    }
+
+    /// `sync_apply` that leaves out records of the given kinds (a device's
+    /// sync scope, e.g. a server that takes no stored credentials).
+    pub fn sync_apply_scoped(&self, records: Vec<Vec<u8>>, skip_kinds: Vec<String>) -> anyhow::Result<u32> {
         let mut st = self.st();
         let mut changed = 0;
         for sealed in records {
             let plain = st.vault.open_blob("sync-record", &sealed)?;
             for r in codec::decode_records(&plain)? {
+                if skip_kinds.contains(&r.kind) {
+                    continue;
+                }
                 if st.vault.merge_remote(&r) != myterm_core::sync::Causality::Equal {
                     changed += 1;
                 }
@@ -1054,6 +1071,7 @@ impl MyTerm {
 
     /// Connects to a host and opens a shell. Dart receives a stream:
     /// `Started(id)`, then `Output`... and finally `Closed`, or `Error`.
+    #[cfg(feature = "flutter")]
     #[allow(clippy::too_many_arguments)]
     pub async fn connect(
         &self,
@@ -1066,13 +1084,36 @@ impl MyTerm {
         confirm_host_key: impl Fn(String, u16, String, String) -> DartFnFuture<bool> + Send + Sync + 'static,
         hardware_sign: impl Fn(String, Vec<u8>) -> DartFnFuture<Vec<u8>> + Send + Sync + 'static,
     ) -> anyhow::Result<()> {
-        match self.connect_inner(host_id, cols, rows, auth, tmux_session, &events, confirm_host_key, hardware_sign).await {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                let _ = events.add(SessionEventDto::Error(e.to_string()));
-                Ok(())
-            }
+        let sink = events.clone();
+        let events: EventFn = Arc::new(move |e| {
+            let _ = sink.add(e);
+        });
+        let prompt: Arc<dyn HostKeyPrompt> = Arc::new(DartPrompt(Arc::new(confirm_host_key)));
+        self.connect_native(host_id, cols, rows, auth, tmux_session.as_deref().map(tmux_command), events, prompt, Arc::new(hardware_sign))
+            .await
+    }
+
+    /// `connect` for Rust callers (the Linux command line): events through a
+    /// callback, host keys through any [`HostKeyPrompt`]. `command` runs
+    /// instead of a login shell (see [`tmux_command`]). Errors arrive as
+    /// [`SessionEventDto::Error`].
+    #[frb(ignore)]
+    #[allow(clippy::too_many_arguments)]
+    pub async fn connect_native(
+        &self,
+        host_id: String,
+        cols: u32,
+        rows: u32,
+        auth: AuthChoice,
+        command: Option<String>,
+        events: EventFn,
+        prompt: Arc<dyn HostKeyPrompt>,
+        sign: SignFn,
+    ) -> anyhow::Result<()> {
+        if let Err(e) = self.connect_inner(host_id, cols, rows, auth, command, &events, prompt, sign).await {
+            events(SessionEventDto::Error(e.to_string()));
         }
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1082,12 +1123,11 @@ impl MyTerm {
         cols: u32,
         rows: u32,
         auth: AuthChoice,
-        tmux_session: Option<String>,
-        events: &StreamSink<SessionEventDto>,
-        confirm_host_key: impl Fn(String, u16, String, String) -> DartFnFuture<bool> + Send + Sync + 'static,
-        hardware_sign: impl Fn(String, Vec<u8>) -> DartFnFuture<Vec<u8>> + Send + Sync + 'static,
+        command: Option<String>,
+        events: &EventFn,
+        prompt: Arc<dyn HostKeyPrompt>,
+        sign: SignFn,
     ) -> anyhow::Result<()> {
-        let sign: Arc<dyn Fn(String, Vec<u8>) -> DartFnFuture<Vec<u8>> + Send + Sync> = Arc::new(hardware_sign);
         let (opts, final_host_id) = {
             let st = self.st();
             let groups = st.model_groups();
@@ -1137,13 +1177,13 @@ impl MyTerm {
                 ConnectOptions {
                     chain,
                     known_hosts: st.known_hosts.clone(),
-                    prompt: Arc::new(DartPrompt(Arc::new(confirm_host_key))),
+                    prompt,
                     device_id: st.device_id.clone(),
                     now_unix: now(),
                     cols,
                     rows,
                     term: "xterm-256color".into(),
-                    command: tmux_session.as_deref().map(tmux_command),
+                    command,
                 },
                 host_id.clone(),
             )
@@ -1180,7 +1220,7 @@ impl MyTerm {
             id
         };
 
-        let _ = events.add(SessionEventDto::Started(id));
+        events(SessionEventDto::Started(id));
         let state = self.state.clone();
         let events = events.clone();
         rt().spawn(async move {
@@ -1199,10 +1239,10 @@ impl MyTerm {
                             }
                         }
                         drop(guard);
-                        let _ = events.add(SessionEventDto::Output(bytes));
+                        events(SessionEventDto::Output(bytes));
                     }
                     Event::Exit(code) => {
-                        let _ = events.add(SessionEventDto::Exit(code));
+                        events(SessionEventDto::Exit(code));
                     }
                     Event::Closed => break,
                 }
@@ -1212,7 +1252,7 @@ impl MyTerm {
                 let host = l.session.host_id.clone();
                 st.audit.append(now(), AuditKind::Disconnect, Some(&host), None, "");
             }
-            let _ = events.add(SessionEventDto::Closed);
+            events(SessionEventDto::Closed);
         });
         Ok(())
     }
@@ -1396,7 +1436,8 @@ fn cert_dto(i: ssh::CertificateInfo) -> CertificateDto {
 /// Runs the shell inside tmux session `name`, creating it or reattaching;
 /// falls back to a plain login shell where tmux isn't installed. Wrapped in
 /// `sh -c` so it works whatever the user's login shell is (fish included).
-fn tmux_command(name: &str) -> String {
+#[frb(ignore)]
+pub fn tmux_command(name: &str) -> String {
     let name: String = name.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').take(40).collect();
     let name = if name.is_empty() { "myterm".to_string() } else { name };
     format!(
