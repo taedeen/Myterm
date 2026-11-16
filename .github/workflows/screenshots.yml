@@ -74,10 +74,12 @@ jobs:
       - name: Screenshots on the emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 34
+          api-level: 31
           arch: x86_64
           target: google_apis
-          profile: pixel_7
+          profile: pixel_6
+          ram-size: 4096M
+          emulator-boot-timeout: 1200
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           script: cd apps/mobile && flutter drive --driver=test_driver/integration_test.dart --target=integration_test/screenshots_test.dart -d emulator-5554 --dart-define=DEMO_SSH_HOST=10.0.2.2 --dart-define=DEMO_SYNC_URL=http://10.0.2.2:7341 --dart-define=DEMO_SYNC_TOKEN=$DEMO_SYNC_TOKEN --dart-define=DEMO_PASSWORD=$DEMO_PASSWORD
