@@ -65,6 +65,66 @@ jobs:
           docker logs sync
           docker rm -f sync
 
+  linux:
+    # The `myterm` command line, for dbb, a Raspberry Pi or a Linux laptop.
+    # Built on Ubuntu 22.04 (glibc 2.35), so it runs on Debian 12, Ubuntu
+    # 22.04+ and Raspberry Pi OS (bookworm) and later.
+    name: Linux command line (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            os: ubuntu-22.04
+          - arch: aarch64
+            os: ubuntu-22.04-arm
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: cli-${{ matrix.arch }}
+      - name: Tests
+        run: |
+          cargo test -p myterm-cli
+          cargo test -p myterm-ffi --no-default-features
+      - name: Clippy
+        if: matrix.arch == 'x86_64'
+        run: cargo clippy -p myterm-cli --all-targets -- -D warnings
+      - name: Build
+        run: cargo build --release -p myterm-cli
+      - name: Smoke test
+        run: |
+          b=target/release/myterm
+          $b --version
+          $b --help > /dev/null
+          export MYTERM_HOME="$RUNNER_TEMP/myterm-home"
+          $b status | tee status.txt
+          grep -q "not joined" status.txt
+          [ "$(stat -c %a "$MYTERM_HOME")" = 700 ]
+          [ "$(stat -c %a "$MYTERM_HOME/meta.json")" = 600 ]
+          if $b hosts 2>err.txt; then echo "hosts should refuse before joining"; exit 1; fi
+          grep -q "myterm join" err.txt
+      - name: Package
+        run: |
+          v="$(sed -n 's/^version: *\([0-9.]*\).*/\1/p' apps/mobile/pubspec.yaml)"
+          d="myterm-$v-linux-${{ matrix.arch }}"
+          mkdir -p "dist/$d/completions"
+          cp target/release/myterm "dist/$d/"
+          strip "dist/$d/myterm"
+          for sh in bash zsh fish; do "dist/$d/myterm" completions $sh > "dist/$d/completions/myterm.$sh"; done
+          cp crates/cli/README.md "dist/$d/"
+          tar -C dist -czf "dist/$d.tar.gz" "$d"
+          ls -la dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: myterm-linux-${{ matrix.arch }}
+          path: dist/*.tar.gz
+          retention-days: 14
+
   windows:
     name: Windows app
     needs: [core]
@@ -257,7 +317,7 @@ jobs:
     # it (tag vX.Y.Z on that commit). Pushing a vX.Y.Z tag works too.
     name: Release
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
-    needs: [core, crates, sync-server, windows, android]
+    needs: [core, crates, sync-server, windows, android, linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -294,6 +354,7 @@ jobs:
           mkdir release
           cp artifacts/myterm-android-apk/app-release.apk "release/MyTerm-$VERSION.apk"
           cp artifacts/myterm-windows/MyTerm-*-setup.exe artifacts/myterm-windows/MyTerm-*-windows-portable.zip release/
+          cp artifacts/myterm-linux-x86_64/*.tar.gz artifacts/myterm-linux-aarch64/*.tar.gz release/
           cp artifacts/myterm-windows/myterm-root.cer artifacts/myterm-windows/myterm-codesign.cer artifacts/myterm-windows/Trust-MyTerm.ps1 release/
           (cd release && sha256sum * > SHA256SUMS.txt)
           ls -la release

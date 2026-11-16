@@ -1,0 +1,32 @@
+[package]
+name = "myterm-cli"
+description = "MyTerm for the Linux command line"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "myterm"
+path = "src/main.rs"
+
+[dependencies]
+myterm-ffi = { path = "../ffi", default-features = false }
+myterm-core = { path = "../core" }
+myterm-ssh = { path = "../ssh" }
+myterm-vault = { path = "../vault" }
+async-trait = "0.1"
+anyhow = "1"
+base64 = "0.22"
+clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
+crossterm = "0.28"
+getrandom = "0.2"
+libc = "0.2"
+rpassword = "7"
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util", "signal", "sync", "time"] }
+ureq = { version = "2.12", default-features = false, features = ["json", "tls", "native-certs"] }
+
+[dev-dependencies]
+tempfile = "3"
