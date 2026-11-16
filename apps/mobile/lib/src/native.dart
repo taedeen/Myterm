@@ -35,6 +35,10 @@ class Native {
 
   static bool get _android => Platform.isAndroid;
 
+  /// Screenshot runs in CI (integration_test/screenshots_test.dart): no
+  /// biometric or Windows Hello prompts, which a CI machine can't answer.
+  static bool skipPlatformAuth = false;
+
   /// Hardware-bound SSH keys (Android Keystore). Not on Windows yet.
   static bool get hardwareKeysSupported => _android;
 
@@ -79,6 +83,7 @@ class Native {
 
   /// Wraps the vault master key with a Keystore AES key (biometric prompt).
   static Future<Uint8List?> deviceWrap(Uint8List masterKey) async {
+    if (skipPlatformAuth) return null;
     if (Platform.isWindows) {
       if (!await _hello('Turn on Windows Hello unlock for MyTerm')) return null;
       return osProtect(data: masterKey);
@@ -88,6 +93,7 @@ class Native {
 
   /// Unwraps the master key after the biometric prompt. Null if cancelled.
   static Future<Uint8List?> deviceUnwrap(Uint8List wrapped) async {
+    if (skipPlatformAuth) return null;
     if (Platform.isWindows) {
       if (!await _hello('Unlock MyTerm')) return null;
       try {
@@ -105,6 +111,7 @@ class Native {
 
   /// Biometric or device-PIN confirmation without a key (Type password).
   static Future<bool> confirmUser(String title) async {
+    if (skipPlatformAuth) return true;
     if (Platform.isWindows) return _hello(title);
     return await _ch.invokeMethod<bool>('confirmUser', {'title': title}) ?? false;
   }

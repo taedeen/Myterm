@@ -1,0 +1,160 @@
+# Screenshots for the user guide, from the real apps with a demo vault:
+# Android (emulator) and Windows, each against a throwaway SSH server and
+# sync server on the runner. Output: the "screenshots-*" artifacts.
+# Test: apps/mobile/integration_test/screenshots_test.dart.
+name: Screenshots
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [screenshots]
+
+concurrency:
+  group: screenshots-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Throwaway values: they exist only on the runner for this run.
+  DEMO_PASSWORD: Demo-Passw0rd-2026
+  DEMO_SYNC_TOKEN: demo-sync-token-0123456789abcdef
+
+jobs:
+  android:
+    name: Android screenshots
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk,flutter_rust_bridge_codegen@2.11.1
+      - name: Prepare Android build (emulator only)
+        env:
+          MYTERM_ANDROID_TARGETS: x86_64
+        run: apps/mobile/tool/prepare_android.sh
+      - name: Demo SSH server (users demo = server1, admin = server2)
+        run: |
+          sudo apt-get install -y -qq openssh-server > /dev/null
+          printf 'PasswordAuthentication yes\nKbdInteractiveAuthentication yes\nPrintLastLog no\n' |
+            sudo tee /etc/ssh/sshd_config.d/00-demo.conf > /dev/null
+          for pair in demo:server1 admin:server2; do
+            u="${pair%%:*}"; h="${pair##*:}"
+            sudo useradd -m -s /bin/bash "$u"
+            echo "$u:$DEMO_PASSWORD" | sudo chpasswd
+            sudo touch "/home/$u/.hushlogin"
+            printf '%s\n' "PS1='\\[\\e[01;32m\\]\\u@$h\\[\\e[00m\\]:\\[\\e[01;34m\\]\\w\\[\\e[00m\\]\\\$ '" |
+              sudo tee -a "/home/$u/.bashrc" > /dev/null
+          done
+          tail -1 /home/demo/.bashrc
+          sudo systemctl restart ssh
+      - name: Demo sync server
+        run: |
+          mkdir -p "$RUNNER_TEMP/sync"
+          cd server
+          MYTERM_SYNC_TOKEN="$DEMO_SYNC_TOKEN" MYTERM_SYNC_CERT_PRINCIPALS=demo,admin \
+            nohup python3 -m myterm_sync --port 7341 --db "$RUNNER_TEMP/sync/sync.db" > "$RUNNER_TEMP/sync/log.txt" 2>&1 &
+          for i in $(seq 30); do curl -fsS http://127.0.0.1:7341/v1/health && break; sleep 1; done
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Screenshots on the emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          profile: pixel_7
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          script: cd apps/mobile && flutter drive --driver=test_driver/integration_test.dart --target=integration_test/screenshots_test.dart -d emulator-5554 --dart-define=DEMO_SSH_HOST=10.0.2.2 --dart-define=DEMO_SYNC_URL=http://10.0.2.2:7341 --dart-define=DEMO_SYNC_TOKEN=$DEMO_SYNC_TOKEN --dart-define=DEMO_PASSWORD=$DEMO_PASSWORD
+      - name: Sync server log
+        if: always()
+        run: cat "$RUNNER_TEMP/sync/log.txt" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshots-android
+          path: apps/mobile/screenshots/
+          if-no-files-found: warn
+
+  windows:
+    name: Windows screenshots
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: flutter_rust_bridge_codegen@2.11.1
+      - name: Build
+        run: apps/mobile/tool/prepare_windows.sh
+      - name: Demo SSH server (OpenSSH with Git Bash; demo = server1, admin = server2)
+        shell: pwsh
+        run: |
+          if (-not (Get-Service sshd -ErrorAction SilentlyContinue)) {
+            $cap = Get-WindowsCapability -Online -Name 'OpenSSH.Server*' | Select-Object -First 1
+            Write-Host "OpenSSH.Server capability: $($cap.Name) $($cap.State)"
+            try { Add-WindowsCapability -Online -Name $cap.Name -ErrorAction Stop | Out-Null }
+            catch {
+              Write-Warning "Capability install failed ($_); using Chocolatey"
+              choco install openssh -y --no-progress --params '"/SSHServerFeature"' | Out-Null
+            }
+          }
+          New-Item -Path 'HKLM:\SOFTWARE\OpenSSH' -Force | Out-Null
+          New-ItemProperty -Path 'HKLM:\SOFTWARE\OpenSSH' -Name DefaultShell -Value 'C:\Program Files\Git\bin\bash.exe' -PropertyType String -Force | Out-Null
+          $pw = ConvertTo-SecureString $env:DEMO_PASSWORD -AsPlainText -Force
+          foreach ($u in 'demo', 'admin') { New-LocalUser -Name $u -Password $pw -PasswordNeverExpires | Out-Null }
+          $rc = @'
+
+          case "$(whoami)" in
+            demo) PS1='\[\e[01;32m\]demo@server1\[\e[00m\]:\[\e[01;34m\]\w\[\e[00m\]\$ ' ;;
+            admin) PS1='\[\e[01;32m\]admin@server2\[\e[00m\]:\[\e[01;34m\]\w\[\e[00m\]\$ ' ;;
+          esac
+          '@
+          Add-Content -Path 'C:\Program Files\Git\etc\bash.bashrc' -Value $rc
+          Start-Service sshd
+          Get-Service sshd
+      - name: Screenshots
+        run: |
+          mkdir -p "$RUNNER_TEMP/sync"
+          (cd server && MYTERM_SYNC_TOKEN="$DEMO_SYNC_TOKEN" MYTERM_SYNC_CERT_PRINCIPALS=demo,admin \
+            python -m myterm_sync --port 7341 --db "$RUNNER_TEMP/sync/sync.db" > "$RUNNER_TEMP/sync/log.txt" 2>&1 &)
+          for i in $(seq 30); do curl -fsS http://127.0.0.1:7341/v1/health && break; sleep 1; done
+          # myterm_ffi.dll for the debug build the test runs.
+          export PATH="$PWD/target/release:$PATH"
+          cd apps/mobile
+          flutter drive -d windows --driver=test_driver/integration_test.dart --target=integration_test/screenshots_test.dart \
+            --dart-define=DEMO_SSH_HOST=127.0.0.1 --dart-define=DEMO_SYNC_URL=http://127.0.0.1:7341 \
+            --dart-define=DEMO_SYNC_TOKEN="$DEMO_SYNC_TOKEN" --dart-define=DEMO_PASSWORD="$DEMO_PASSWORD"
+      - name: Sync server log
+        if: always()
+        run: cat "$RUNNER_TEMP/sync/log.txt" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshots-windows
+          path: apps/mobile/screenshots/
+          if-no-files-found: warn
