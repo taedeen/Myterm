@@ -135,6 +135,37 @@ pub fn join(store: &mut Store, url: &str, server_token: &str, name: &str, passwo
     Ok(mk)
 }
 
+/// `myterm join --create`: starts a new vault on the server from this
+/// machine. Returns the raw master key.
+pub fn create(store: &mut Store, url: &str, server_token: &str, name: &str, password: &str) -> Result<Vec<u8>> {
+    let base = normalise_url(url)?;
+    http(&base, "GET", "/v1/health", None, &Auth { server_token: None, vault_token: None, device: None })?;
+    let name = name.trim().to_lowercase();
+    let setup = store.engine.create_vault(password.to_string(), true)?;
+    let wrapped = json!({
+        "password_wrapped": B64.encode(&setup.password_wrapped),
+        "kdf_salt": B64.encode(&setup.kdf_salt),
+        "kdf_m_kib": setup.kdf_m_kib,
+        "kdf_t": setup.kdf_t,
+        "kdf_p": setup.kdf_p,
+    });
+    let id = store.engine.sync_identity()?;
+    http(
+        &base,
+        "POST",
+        "/v1/vaults",
+        Some(json!({"name": name, "vault_id": id.vault_id, "auth_hash": id.auth_hash, "wrapped": wrapped})),
+        &Auth { server_token: Some(server_token.trim()), vault_token: None, device: None },
+    )?;
+    store.set_wrapped(&wrapped)?;
+    store.meta.insert("syncUrl".into(), json!(base));
+    store.meta.insert("syncVaultName".into(), json!(name));
+    store.meta.insert("syncCursor".into(), json!(0));
+    store.meta.remove("syncDigests");
+    store.write_meta()?;
+    Ok(setup.master_key_for_device_wrap)
+}
+
 fn urlencode(s: &str) -> String {
     s.bytes()
         .map(|b| match b {
