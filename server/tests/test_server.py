@@ -11,7 +11,11 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from myterm_sync.server import App, RateLimiter, Store, make_server  # noqa: E402
+import shutil  # noqa: E402
+import subprocess  # noqa: E402
+import tempfile  # noqa: E402
+
+from myterm_sync.server import App, CertificateAuthority, RateLimiter, Store, make_server  # noqa: E402
 
 SERVER_TOKEN = "s" * 32
 VAULT_TOKEN = "ab" * 32
@@ -265,6 +269,43 @@ class ServerTest(unittest.TestCase):
         store = Store(path)
         cols = [r[1] for r in store.db.execute("PRAGMA table_info(vaults)")]
         self.assertIn("moved_to", cols)
+
+    def test_certificates_off_by_default(self):
+        self.assertEqual(self.req("GET", "/v1/ssh-ca.pub")[0], 404)
+        self.create()
+        status, body = self.req("POST", f"/v1/vaults/{VAULT_ID}/ssh-cert", {"public_key": "ssh-ed25519 AAAA"}, vault=VAULT_TOKEN)
+        self.assertEqual((status, "not enabled" in body["error"]), (404, True))
+
+    @unittest.skipUnless(shutil.which("ssh-keygen"), "needs ssh-keygen")
+    def test_certificates_signed_for_vault_devices(self):
+        d = tempfile.mkdtemp()
+        self.app.ca = CertificateAuthority(os.path.join(d, "ca"), ["alice", "root"], 8)
+        # The CA's public key, as plain text for TrustedUserCAKeys.
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        c.request("GET", "/v1/ssh-ca.pub")
+        r = c.getresponse()
+        ca_pub = r.read().decode()
+        c.close()
+        self.assertEqual(r.status, 200)
+        self.assertTrue(ca_pub.startswith("ssh-ed25519 ") and "myterm-user-ca" in ca_pub)
+
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", os.path.join(d, "user")], check=True)
+        with open(os.path.join(d, "user.pub")) as f:
+            user_pub = f.read().strip()
+        self.create()
+        path = f"/v1/vaults/{VAULT_ID}/ssh-cert"
+        self.assertEqual(self.req("POST", path, {"public_key": user_pub})[0], 401, "needs the vault token")
+        self.assertEqual(self.req("POST", path, {"public_key": "ssh-rsa AAAA"}, vault=VAULT_TOKEN)[0], 400)
+        status, body = self.req("POST", path, {"public_key": user_pub}, vault=VAULT_TOKEN, device="pc-1", name="Office PC")
+        self.assertEqual(status, 200)
+        self.assertTrue(body["certificate"].startswith("ssh-ed25519-cert-v01@openssh.com "))
+        with open(os.path.join(d, "user-cert.pub"), "w") as f:
+            f.write(body["certificate"] + "\n")
+        shown = subprocess.run(["ssh-keygen", "-L", "-f", os.path.join(d, "user-cert.pub")],
+                               check=True, capture_output=True, text=True).stdout
+        self.assertIn("myterm:01234567:Office_PC", shown)
+        self.assertIn("alice", shown)
+        self.assertIn("root", shown)
 
     def test_short_server_token_refused(self):
         with self.assertRaises(ValueError):
