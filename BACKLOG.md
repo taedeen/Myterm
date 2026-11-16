@@ -44,13 +44,14 @@ Home Assistant actions, TPM keys on Windows, iOS.
   automation through the sync server.
 
 ## Build and release
-- **Sync server address from a secret.** Replace the hard-coded
-  `https://myterm.example.com` with a GitHub secret `MYTERM_SYNC_SERVER`,
-  built into the apps and `myterm` at release time; if the secret is blank,
-  default to `https://myterm.example.com`. Today it's in
+- **No personal server address in the apps.** `https://myterm.example.com`
+  is personal and must not ship: remove it from
   `apps/mobile/lib/src/sync_service.dart` (`defaultUrl`),
-  `crates/cli/src/sync.rs` (`DEFAULT_URL`) and the docs (server README,
-  user guide). The address stays editable in Sync setup and `myterm join`.
+  `crates/cli/src/sync.rs` (`DEFAULT_URL`) and the repo docs (server README),
+  using `https://myterm.example.com` only as the placeholder hint. The first
+  Sync setup or `myterm join` asks for the address; each device then
+  remembers the last one entered and fills it in next time (Create, Join,
+  rejoin after Stop syncing).
 
 ## Platforms
 - ✅ 0.4.0 ⭐ **Linux command line (`myterm`).** One Rust binary on the shared crates:
