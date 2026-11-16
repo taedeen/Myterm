@@ -1,5 +1,10 @@
 # MyTerm sync server: standard-library Python, no third-party packages.
+# ssh-keygen (openssh-client) signs SSH certificates when they're turned on.
 FROM python:3.13-slim
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends openssh-client \
+ && rm -rf /var/lib/apt/lists/*
 
 RUN useradd --system --uid 10001 --home-dir /data --shell /usr/sbin/nologin myterm \
  && mkdir -p /data && chown myterm /data

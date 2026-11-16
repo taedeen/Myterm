@@ -515,3 +515,91 @@ class _DevicesScreenState extends State<DevicesScreen> {
     );
   }
 }
+
+/// Settings card: this device's SSH certificate from the sync server's CA.
+class CertificateCard extends StatelessWidget {
+  const CertificateCard({super.key, required this.state});
+  final AppState state;
+
+  String _until(BigInt unix) {
+    final t = DateTime.fromMillisecondsSinceEpoch(unix.toInt() * 1000);
+    final left = t.difference(DateTime.now());
+    final hm = '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+    if (left.isNegative) return 'expired at $hm';
+    return 'valid until $hm (${left.inHours} h ${left.inMinutes % 60} min)';
+  }
+
+  Future<void> _setup(BuildContext context) async {
+    String text;
+    try {
+      final ca = await state.sync.caPublicKey();
+      final url = state.sync.url;
+      text = '# On each server that should accept MyTerm certificates:\n'
+          'curl -fsS $url/v1/ssh-ca.pub | sudo tee /etc/ssh/myterm_user_ca.pub\n'
+          'echo "TrustedUserCAKeys /etc/ssh/myterm_user_ca.pub" | sudo tee /etc/ssh/sshd_config.d/myterm-ca.conf\n'
+          'sudo sshd -t && (sudo systemctl reload ssh 2>/dev/null || sudo systemctl reload sshd)\n'
+          '# (No /etc/ssh/sshd_config.d? Add the TrustedUserCAKeys line to /etc/ssh/sshd_config instead.)\n'
+          '\n# The CA key (for reference):\n$ca';
+    } catch (e) {
+      text = '$e';
+    }
+    if (!context.mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Trust MyTerm certificates on a server'),
+        content: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Run these on the server (or make them a snippet). Then turn on "Sign in with MyTerm '
+                'certificate" for that host. Login names must be ones the sync server signs for.'),
+            const SizedBox(height: 12),
+            SelectableText(text, style: const TextStyle(fontFamily: 'monospace', fontSize: 12)),
+          ]),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Clipboard.setData(ClipboardData(text: text)),
+            child: const Text('Copy'),
+          ),
+          FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('Done')),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final sync = state.sync;
+    return ListenableBuilder(
+      listenable: sync,
+      builder: (context, _) {
+        if (!sync.configured) return const SizedBox.shrink();
+        final cert = state.core.sshCertificate();
+        return Card(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            ListTile(
+              leading: const Icon(Icons.verified_user),
+              title: const Text('SSH certificate'),
+              subtitle: Text([
+                if (cert == null)
+                  'None yet. Short-lived certificates from your sync server sign you in to servers that trust it.'
+                else ...[
+                  _until(cert.validBefore),
+                  'Log in as: ${cert.principals.join(', ')}',
+                ],
+                if (sync.certError != null) sync.certError!,
+              ].join('\n')),
+            ),
+            OverflowBar(alignment: MainAxisAlignment.end, children: [
+              TextButton(onPressed: () => _setup(context), child: const Text('Server setup')),
+              FilledButton.tonal(
+                onPressed: () => sync.renewCertificate(force: true),
+                child: Text(cert == null ? 'Get certificate' : 'Renew now'),
+              ),
+            ]),
+          ]),
+        );
+      },
+    );
+  }
+}

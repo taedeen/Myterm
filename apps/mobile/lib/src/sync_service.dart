@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 import 'app_state.dart';
+import 'rust/api.dart' show CertificateDto;
 
 class SyncError implements Exception {
   SyncError(this.message, [this.status, this.body = const {}]);
@@ -294,6 +295,7 @@ class SyncService extends ChangeNotifier {
 
       _meta['syncLastAt'] = DateTime.now().millisecondsSinceEpoch;
       lastError = null;
+      if (state.core.sshCertificate() != null) unawaited(renewCertificate());
       lastResult = 'Received $received ($changed changed here), sent ${todo.length}';
       // Log syncs that did something; quiet ones every minute would bury the rest.
       if (changed > 0 || todo.isNotEmpty || resetDetected) {
@@ -337,6 +339,62 @@ class SyncService extends ChangeNotifier {
     }
     lastError = message;
     lastResult = null;
+  }
+
+  // ------------------------------------------------------------- SSH certificates
+
+  /// Last certificate problem (e.g. not enabled on the server), for Settings.
+  String? certError;
+  Future<CertificateDto?>? _renewing;
+
+  /// Gets a new certificate from the server when this device has none or it
+  /// expires within [margin]. Returns the current certificate.
+  Future<CertificateDto?> renewCertificate({bool force = false, Duration margin = const Duration(hours: 2)}) {
+    return _renewing ??= _renew(force, margin).whenComplete(() => _renewing = null);
+  }
+
+  Future<CertificateDto?> _renew(bool force, Duration margin) async {
+    final current = state.core.sshCertificate();
+    final left = current == null
+        ? Duration.zero
+        : DateTime.fromMillisecondsSinceEpoch(current.validBefore.toInt() * 1000).difference(DateTime.now());
+    if (!force && left > margin) return current;
+    if (!configured || moved || !state.unlocked) return current;
+    try {
+      final pub = await state.core.certificatePublicKey(comment: 'myterm ${state.deviceName}');
+      final id = state.core.syncIdentity();
+      final r = await _http(url!, 'POST', '/v1/vaults/${id.vaultId}/ssh-cert',
+          vaultToken: id.vaultToken, body: {'public_key': pub});
+      final cert = await state.core.setSshCertificate(certificate: r['certificate'] as String);
+      certError = null;
+      await state.save(syncAfter: false);
+      notifyListeners();
+      return cert;
+    } on SyncError catch (e) {
+      certError = e.status == 404
+          ? 'SSH certificates aren\'t turned on on the sync server (MYTERM_SYNC_CERT_PRINCIPALS).'
+          : e.message;
+      notifyListeners();
+      return current;
+    }
+  }
+
+  /// The CA public key servers trust, from the sync server.
+  Future<String> caPublicKey() async {
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
+    try {
+      final req = await client.getUrl(Uri.parse('${url!}/v1/ssh-ca.pub'));
+      final res = await req.close().timeout(const Duration(seconds: 20));
+      final text = await res.transform(utf8.decoder).join();
+      if (res.statusCode != 200) {
+        throw SyncError('SSH certificates aren\'t turned on on the sync server.', res.statusCode);
+      }
+      return text.trim();
+    } on SocketException catch (e) {
+      throw SyncError("Can't reach the sync server: ${e.osError?.message ?? e.message}");
+    } finally {
+      client.close(force: true);
+    }
   }
 
   // ------------------------------------------------------------- devices
