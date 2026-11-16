@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.4.0
+
+**MyTerm on the Linux command line (`myterm`)**, for x86_64 and aarch64
+(Raspberry Pi). Another device on your vault, through the same sync server:
+
+- `myterm join`: joins your vault with the master password and a **sync
+  scope**: `full`, `certs` (hosts, history and an SSH certificate, no stored
+  passwords or keys; the default, for servers) or `hosts`. `--create` starts a
+  new vault from Linux.
+- `myterm`: host picker. `myterm ssh dbb`: MyTerm's client in your terminal,
+  with jump hosts, certificates, saved credentials, and a status line showing
+  autocomplete suggestions from your shared history (Ctrl+] then 1-6 runs one,
+  p types the stored password, . disconnects). `--tmux` reattaches to the same
+  server-side session as the app's first tab.
+- `myterm ssh dbb -- cmd`, `myterm run 'cmd' -t homelab` (parallel, output per
+  host), `myterm multi` (tmux panes with typing sent to all).
+- `myterm import ~/.ssh/config`, `myterm set` (host options), `myterm cert
+  [--renew|--trust]` (`--trust` makes this machine's sshd accept MyTerm
+  certificates), `sync`, `status`, `devices`, `rename`, `audit`, completions.
+- Unlocking keeps the key in a small background process for 15 minutes of
+  inactivity (locked in memory, your user only); `myterm lock` ends it.
+- Installed and updated by `upgrade.sh --setup myterm-cli` (release download,
+  checksum checked) or from the release's tar.gz.
+
 ## 0.3.0
 
 - **Keep session running (auto-reattach):** a per-host option that runs the

@@ -76,7 +76,7 @@ The app needs Android 11 (API 30) or later, for per-use Keystore authentication.
 
 ## Status
 
-Version 0.2.0 (see [CHANGELOG.md](CHANGELOG.md)).
+Version 0.4.0 (see [CHANGELOG.md](CHANGELOG.md)).
 
 | Part | State |
 |---|---|
@@ -84,8 +84,9 @@ Version 0.2.0 (see [CHANGELOG.md](CHANGELOG.md)).
 | Android app | Released: APK signed with the MyTerm key, installs over earlier builds |
 | Windows app | Released: signed installer + portable zip ([packaging/windows](packaging/windows/README.md)) |
 | Sync server | Released: Docker image, device list and revocation ([server](server/README.md)) |
-| Server tools | `deploy/`: upgrade.sh, bootstrap.sh, deploy-apk.sh |
-| Not yet | iOS, Linux desktop, TPM-backed SSH keys on Windows, FIDO2 keys |
+| Linux command line | Released: `myterm` for x86_64 and aarch64 ([crates/cli](crates/cli/README.md)) |
+| Server tools | `deploy/`: upgrade.sh (Docker apps and release binaries), bootstrap.sh, deploy-apk.sh |
+| Not yet | iOS, OpenSSH agent integration for the command line, TPM-backed SSH keys on Windows, FIDO2 keys |
 
 ## Releasing
 

@@ -160,8 +160,13 @@ fn main() -> ExitCode {
     }
 }
 
-fn rt() -> tokio::runtime::Runtime {
-    tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("tokio runtime")
+/// Runs async work, then drops the runtime without waiting for the
+/// keyboard reader (a blocking read that only ends at the next key press).
+fn block_on<F: std::future::Future>(f: F) -> F::Output {
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("tokio runtime");
+    let out = rt.block_on(f);
+    rt.shutdown_background();
+    out
 }
 
 /// Unlocks, keeping the key in the key holder for the next commands.
@@ -429,7 +434,7 @@ fn real_main(cli: Cli) -> Result<u8> {
             let h = find_host(&store.engine.list_hosts(), &host)?;
             if !command.is_empty() {
                 let store = Arc::new(store);
-                let outcomes = rt().block_on(run::run(store.clone(), vec![h], command.join(" "), 1, 3600));
+                let outcomes = block_on(run::run(store.clone(), vec![h], command.join(" "), 1, 3600));
                 let o = &outcomes[0];
                 print!("{}", o.output);
                 if let Some(e) = &o.error {
@@ -447,7 +452,7 @@ fn real_main(cli: Cli) -> Result<u8> {
             sync_quietly(&mut store);
             let selected = select_hosts(&store.engine.list_hosts(), &hosts, &tag)?;
             let store = Arc::new(store);
-            let outcomes = rt().block_on(run::run(store.clone(), selected, command, parallel, timeout));
+            let outcomes = block_on(run::run(store.clone(), selected, command, parallel, timeout));
             let failed = run::print(&outcomes, prefix);
             let _ = store.save();
             Ok(if failed == 0 { 0 } else { 1 })
@@ -519,7 +524,7 @@ fn real_main(cli: Cli) -> Result<u8> {
 
 fn connect(store: &mut Store, host: &HostDto, tmux: Option<String>, _named: bool) -> Result<u8> {
     let tmux = tmux.or_else(|| (host.persistent == Some(true)).then(|| "myterm-1".to_string()));
-    let code = rt().block_on(term::interactive(store, host, tmux))?;
+    let code = block_on(term::interactive(store, host, tmux))?;
     let _ = store.save();
     sync_quietly(store);
     Ok(code.clamp(0, 255) as u8)
