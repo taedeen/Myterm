@@ -155,7 +155,7 @@ void main() {
 
     // ------------------------------------------------ demo vault
     final server1 = host('server1', sshHost, 'demo', tags: ['web'], os: 'ubuntu');
-    final server2 = host('server2', sshHost, 'admin', tags: ['web'], os: 'ubuntu');
+    final server2 = host('server2', sshHost, 'ops', tags: ['web'], os: 'ubuntu');
     final gateway = host('gateway', '203.0.113.10', 'demo', tags: ['edge']);
     final nas = host('nas', '192.0.2.10', 'demo', tags: ['storage'], via: [gateway.id], cert: true, keep: true);
     final pi = host('pi', '192.0.2.50', 'pi', tags: ['homelab'], os: 'raspbian');
