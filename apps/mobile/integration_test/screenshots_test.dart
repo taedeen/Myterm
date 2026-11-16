@@ -29,6 +29,7 @@ import 'package:myterm/src/rust/api.dart';
 import 'package:myterm/src/screens/hosts_screen.dart';
 import 'package:myterm/src/screens/sync_screen.dart' show DevicesScreen;
 import 'package:myterm/src/screens/terminal_screen.dart';
+import 'package:myterm/src/terminal_session.dart';
 
 const sshHost = String.fromEnvironment('DEMO_SSH_HOST', defaultValue: '127.0.0.1');
 const syncUrl = String.fromEnvironment('DEMO_SYNC_URL', defaultValue: 'http://127.0.0.1:7341');
