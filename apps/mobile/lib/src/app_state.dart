@@ -148,7 +148,14 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  Future<void> _writeMeta() async {
+  Future<void> _metaWrites = Future.value();
+
+  /// One write at a time: two settings changed in quick succession wrote
+  /// the same temp file at once, and on Windows the second rename failed
+  /// ("being used by another process").
+  Future<void> _writeMeta() => _metaWrites = _metaWrites.catchError((_) {}).then((_) => _writeMetaNow());
+
+  Future<void> _writeMetaNow() async {
     final tmp = File('${_metaFile.path}.tmp');
     await tmp.writeAsString(jsonEncode(_meta), flush: true);
     await tmp.rename(_metaFile.path);
@@ -163,8 +170,15 @@ class AppState extends ChangeNotifier {
     _saveTimer = Timer(const Duration(seconds: 3), save);
   }
 
-  Future<void> save({bool syncAfter = true}) async {
+  Future<void> _saves = Future.value();
+
+  /// Saves are queued for the same reason as meta.json writes.
+  Future<void> save({bool syncAfter = true}) {
     _saveTimer?.cancel();
+    return _saves = _saves.catchError((_) {}).then((_) => _saveNow(syncAfter));
+  }
+
+  Future<void> _saveNow(bool syncAfter) async {
     if (!unlocked) return;
     final blobs = await core.exportStore();
     final tmp = File('${_storeFile.path}.tmp');
