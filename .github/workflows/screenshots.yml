@@ -186,3 +186,26 @@ jobs:
           name: screenshots-windows
           path: apps/mobile/screenshots/
           if-no-files-found: warn
+
+  publish:
+    # The PNGs on branch guide-screenshots, to fetch with git.
+    name: Publish to branch guide-screenshots
+    needs: [android, windows]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: screenshots-*
+          path: shots
+          merge-multiple: true
+      - name: Push
+        run: |
+          ls -la shots
+          cd shots
+          git init -q -b guide-screenshots
+          git add .
+          git -c user.name="MyTerm CI" -c user.email="ci@localhost" commit -qm "Screenshots from run ${{ github.run_id }}"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" guide-screenshots
