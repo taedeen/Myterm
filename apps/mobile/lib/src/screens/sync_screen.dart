@@ -212,7 +212,7 @@ class _SyncSetupScreenState extends State<SyncSetupScreen> {
           enableSuggestions: false,
           decoration: dec(
             'Server token',
-            'MYTERM_SYNC_TOKEN from the server\'s .env. Copy it from a MyTerm session to server1 '
+            'MYTERM_SYNC_TOKEN from the server\'s .env. Copy it from a MyTerm session to the server '
                 '(cat ~/docker_volumes/myterm-sync/server/.env, long-press, Copy), then paste here. '
                 'Only used for this setup; not stored.',
           ).copyWith(suffixIcon: _pasteInto(_token)),

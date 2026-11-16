@@ -218,8 +218,8 @@ void main() {
     final s1 = await connect(t, state, server1, hostKeyShot: phone ? 'host-key' : null);
     // Some history for autocomplete. The Windows CI SSH server runs Git Bash.
     final commands = phone
-        ? ['uptime', 'df -h /', 'free -h', 'systemctl status ssh --no-pager | head -5', 'clear', 'uptime']
-        : ['date', 'git --version', 'ls /', 'clear', 'whoami', 'ls /'];
+        ? ['systemctl status ssh --no-pager | head -4', 'clear', 'uptime', 'df -h /', 'free -h', 'ls /etc/ssh']
+        : ['date', 'git --version', 'clear', 'whoami', 'ls /'];
     for (final c in commands) {
       await run(t, s1, c);
     }
@@ -240,7 +240,8 @@ void main() {
       await t.tap(find.byTooltip('Split: side by side'));
       await settle(t, 1500);
       await run(t, s2, 'whoami');
-      await run(t, s2, 'ls');
+      await run(t, s2, 'date');
+      await run(t, s2, 'git --version');
       type(s2, 'df');
       await settle(t, 1500);
       await shot(t, 'split');

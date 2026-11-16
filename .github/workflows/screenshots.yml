@@ -64,7 +64,9 @@ jobs:
             printf '%s\n' "PS1='\\[\\e[01;32m\\]\\u@$h\\[\\e[00m\\]:\\[\\e[01;34m\\]\\w\\[\\e[00m\\]\\\$ '" |
               sudo tee -a "/home/$u/.bashrc" > /dev/null
           done
-          tail -1 /home/demo/.bashrc
+          # Both demo hosts are this runner; it answers as server1.
+          sudo hostnamectl set-hostname server1
+          echo "127.0.1.1 server1" | sudo tee -a /etc/hosts > /dev/null
           sudo systemctl restart ssh
       - name: Demo sync server
         run: |
