@@ -148,7 +148,10 @@ jobs:
           Start-Service sshd
           # Log to C:\ProgramData\ssh\logs (before any Match block, which ends the file).
           $cfg = 'C:\ProgramData\ssh\sshd_config'
-          Set-Content -Path $cfg -Value (@('SyslogFacility LOCAL0', 'LogLevel VERBOSE') + (Get-Content $cfg))
+          # The runner image only lets some groups log in; the demo users aren't in them.
+          Get-Content $cfg | Select-String -Pattern '^\s*Allow(Groups|Users)' | ForEach-Object { Write-Host "removing: $_" }
+          $lines = Get-Content $cfg | Where-Object { $_ -notmatch '^\s*Allow(Groups|Users)' }
+          Set-Content -Path $cfg -Value (@('SyslogFacility LOCAL0', 'LogLevel VERBOSE') + $lines)
           Restart-Service sshd
           Get-Service sshd
       - name: Check a demo login
