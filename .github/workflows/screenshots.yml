@@ -145,8 +145,10 @@ jobs:
           esac
           '@
           Add-Content -Path 'C:\Program Files\Git\etc\bash.bashrc' -Value $rc
-          Add-Content -Path 'C:\ProgramData\ssh\sshd_config' -Value "`nSyslogFacility LOCAL0`nLogLevel VERBOSE"
           Start-Service sshd
+          # Log to C:\ProgramData\ssh\logs (before any Match block, which ends the file).
+          $cfg = 'C:\ProgramData\ssh\sshd_config'
+          Set-Content -Path $cfg -Value (@('SyslogFacility LOCAL0', 'LogLevel VERBOSE') + (Get-Content $cfg))
           Restart-Service sshd
           Get-Service sshd
       - name: Check a demo login
