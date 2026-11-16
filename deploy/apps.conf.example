@@ -14,6 +14,13 @@
 #   health      http:URL | log:SERVICE:TEXT ({version} = new version) | container:NAME
 #   health_wait Seconds to wait for health (default 120).
 #   init        Optional shell command run once by --setup, in dir, before the first start.
+#
+# Release binaries (kind = release) come from a repository's GitHub releases instead:
+#   repo        owner/name
+#   asset       File name in the release; {version} and {arch} (x86_64, aarch64) are filled in.
+#   binary      The program inside the archive (default: the app's name).
+#   dir         Where versions are unpacked (the two newest are kept).
+#   install     Where the program is linked (default ~/bin/<binary>).
 
 [myjam]
 remote  = git@github-myjam:taedeen/MyJam-Hub.git
@@ -33,6 +40,14 @@ backup  = server/.env server/data
 health  = http:http://127.0.0.1:7341/v1/health
 # First install: a random server token, and a data folder the container's user (10001) can write.
 init    = cd server && { [ -f .env ] || echo "MYTERM_SYNC_TOKEN=$(openssl rand -hex 24)" > .env; } && chmod 600 .env && mkdir -p data && $SUDO chown 10001:10001 data
+
+[myterm-cli]
+kind    = release
+repo    = taedeen/Myterm
+asset   = myterm-{version}-linux-{arch}.tar.gz
+binary  = myterm
+dir     = ~/.local/share/myterm-cli
+install = ~/bin/myterm
 
 # Example for a future app:
 # [newapp]
