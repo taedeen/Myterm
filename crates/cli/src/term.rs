@@ -222,8 +222,6 @@ pub async fn interactive(store: &Store, host: &HostDto, tmux_name: Option<String
             }
             return Ok(255);
         };
-        attempt = 0;
-
         let mut guard = RawGuard::enter(rows)?;
         let mut status = Status { host: label.clone(), message: None, suggestions: Vec::new(), shown: String::new() };
         let (mut cols, mut rows) = (cols, rows);
