@@ -28,7 +28,7 @@ Linux machine you run.
   keeps the list of devices, and can issue short-lived SSH certificates.
 - **Connections go straight** from the device to your servers (or through a
   jump host); nothing passes through the sync server.
-- Releases are on this repository's Releases page; `upgrade.sh` and
+- Releases are at github.com/taedeen/Myterm/releases; `upgrade.sh` and
   `deploy-apk.sh` on your server install and update everything.
 
 ## Deploy the sync server
@@ -42,7 +42,7 @@ from the repo's `deploy` folder. If the repository is public, that's one
 command, and nothing below needs a deploy key or token:
 
 ```
-curl -fsSLO https://raw.githubusercontent.com/OWNER/Myterm/main/deploy/bootstrap.sh
+curl -fsSLO https://raw.githubusercontent.com/taedeen/Myterm/main/deploy/bootstrap.sh
 ```
 
 If it's private, either copy it from a server that already has it:
@@ -54,7 +54,7 @@ scp ~/.local/share/myterm-tools/deploy/bootstrap.sh NEWSERVER:
 or download it with your read-only GitHub token (one line):
 
 ```
-curl -fsSL -H "Authorization: Bearer YOUR_TOKEN" -H "Accept: application/vnd.github.raw" -o bootstrap.sh https://api.github.com/repos/OWNER/Myterm/contents/deploy/bootstrap.sh
+curl -fsSL -H "Authorization: Bearer YOUR_TOKEN" -H "Accept: application/vnd.github.raw" -o bootstrap.sh https://api.github.com/repos/taedeen/Myterm/contents/deploy/bootstrap.sh
 ```
 
 Then, on the new server:
@@ -65,7 +65,7 @@ bash bootstrap.sh
 
 It installs what's missing, links `upgrade.sh` and `deploy-apk.sh` into
 `~/bin`, and, for a private repository only, makes a read-only GitHub deploy
-key (add it at github.com/OWNER/Myterm → Settings → Deploy keys, write access
+key (add it at github.com/taedeen/Myterm → Settings → Deploy keys, write access
 off) and stores the GitHub token the scripts use. After that, keep them current with:
 
 ```
@@ -477,7 +477,7 @@ the token in `~/.config/apk/github.token`: it's missing, mistyped or expired.
 Check it (200 = fine, 401 = bad token, 404 = no access to the repository):
 
 ```
-curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $(tr -d '[:space:]' < ~/.config/apk/github.token)" https://api.github.com/repos/OWNER/Myterm
+curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $(tr -d '[:space:]' < ~/.config/apk/github.token)" https://api.github.com/repos/taedeen/Myterm
 ```
 
 Copy a working token from another server, or make a new read-only one
