@@ -208,20 +208,43 @@ upgrade_app() {
 # ------------------------------------------------------------------ release binaries
 # Apps with `kind = release` are binaries from a repository's GitHub releases
 # (e.g. the myterm command line), not Docker apps. They are downloaded with the
-# read-only GitHub token deploy-apk.sh uses, checked against the release's
-# SHA256SUMS.txt, unpacked to dir/<version>, and linked to `install`.
+# read-only GitHub token deploy-apk.sh uses (not needed for a public repository),
+# checked against the release's SHA256SUMS.txt, unpacked to dir/<version>, and
+# linked to `install`.
 GH_TOKEN_FILE="${APK_TOKEN_FILE:-$HOME/.config/apk/github.token}"
 GH_API="${UPGRADE_GITHUB_API:-https://api.github.com}"
 
 is_release() { [ "$(get "$1" kind)" = release ]; }
 
-gh_token() {
-  [ -f "$GH_TOKEN_FILE" ] || die "No GitHub token at $GH_TOKEN_FILE (the same one deploy-apk.sh uses; bootstrap.sh can add it)."
-  tr -d '[:space:]' < "$GH_TOKEN_FILE"
+gh_token() {   # the token, or nothing (public repositories don't need one)
+  [ -f "$GH_TOKEN_FILE" ] && tr -d '[:space:]' < "$GH_TOKEN_FILE" || true
 }
 
 gh_curl() {   # gh_curl URL [ACCEPT] -> body on stdout
-  curl -fsSL --retry 3 -H "Authorization: Bearer $(gh_token)" -H "Accept: ${2:-application/vnd.github+json}" "$1"
+  local t; t="$(gh_token)"
+  curl -fsSL --retry 3 ${t:+-H "Authorization: Bearer $t"} -H "Accept: ${2:-application/vnd.github+json}" "$1"
+}
+
+# Is REPO public? (Asked without the token: GitHub answers 404 for private ones.)
+repo_is_public() {
+  [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$GH_API/repos/$1")" = 200 ]
+}
+
+# Why REPO couldn't be read, in words.
+gh_problem() {
+  local t code; t="$(gh_token)"
+  if [ -z "$t" ]; then
+    if repo_is_public "$1"; then echo "GitHub couldn't be reached, or its limit of 60 requests an hour without a token was hit; try again later"
+    else echo "$1 is private and there's no GitHub token at $GH_TOKEN_FILE (bootstrap.sh can add one)"; fi
+    return
+  fi
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -H "Authorization: Bearer $t" "$GH_API/repos/$1")"
+  case "$code" in
+    401) echo "GitHub rejected the token in $GH_TOKEN_FILE (expired or mistyped). Copy a working one there, or make a new read-only one" ;;
+    404) echo "the token in $GH_TOKEN_FILE can't see $1: give it access to that repository" ;;
+    000) echo "GitHub couldn't be reached (network?)" ;;
+    *)   echo "GitHub answered $code" ;;
+  esac
 }
 
 latest_release() {   # latest_release REPO -> JSON of the latest release
@@ -253,7 +276,7 @@ upgrade_release() {   # upgrade_release APP FORCE
   bold "== $app"
   have="$(release_installed "$app")"
   note "installed: ${have:-none}; checking $repo releases…"
-  rel="$(latest_release "$repo")" || { warn "  couldn't read $repo's releases (token, network?)"; return 1; }
+  rel="$(latest_release "$repo")" || { warn "  couldn't read $repo's releases: $(gh_problem "$repo")"; return 1; }
   tag="$(release_field "$rel" tag)"; ver="${tag#v}"
   [ -n "$ver" ] || { warn "  $repo has no release yet"; return 1; }
   if [ "$ver" = "$have" ] && [ "$force" != 1 ]; then note "up to date ($ver)"; return 0; fi
@@ -312,12 +335,16 @@ setup_app() {
   [ -e "$dir" ] && [ -n "$(ls -A "$dir" 2>/dev/null)" ] && die "$dir exists and isn't empty; move it aside first."
 
   # Read-only deploy key per repository (GitHub allows one repo per deploy key).
+  # A public repository needs none: it's fetched over HTTPS instead.
   if [[ "$remote" =~ ^git@([^:]+):([^/]+/[^.]+)(\.git)?$ ]]; then
     alias="${BASH_REMATCH[1]}"; repo="${BASH_REMATCH[2]}"
-    if [ "$alias" != github.com ]; then
+    if repo_is_public "$repo"; then
+      remote="https://github.com/$repo.git"
+      note "$repo is public: fetching over HTTPS, no deploy key needed"
+    elif [ "$alias" != github.com ]; then
       key="$HOME/.ssh/${alias}_deploy"
       if [ ! -f "$key" ]; then
-        ssh-keygen -q -t ed25519 -N "" -C "server1 $app (read-only)" -f "$key"
+        ssh-keygen -q -t ed25519 -N "" -C "$(hostname -s) $app (read-only)" -f "$key"
       fi
       if ! grep -qE "^Host[[:space:]]+$alias\$" "$HOME/.ssh/config" 2>/dev/null; then
         printf '\nHost %s\n    HostName github.com\n    User git\n    IdentityFile %s\n    IdentitiesOnly yes\n' \

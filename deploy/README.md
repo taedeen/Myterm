@@ -10,6 +10,20 @@ All three live in this folder. `bootstrap.sh` checks out just this folder on a
 server and links the scripts into `~/bin`, so `upgrade.sh --self-update`
 keeps them current.
 
+## Public or private repository
+
+The scripts work either way and check for themselves:
+
+| | Private repository | Public repository |
+| --- | --- | --- |
+| Get `bootstrap.sh` | Copy it from a server that has it, or download it with your token (`curl -H "Authorization: Bearer TOKEN" -H "Accept: application/vnd.github.raw" -o bootstrap.sh https://api.github.com/repos/taedeen/Myterm/contents/deploy/bootstrap.sh`) | `curl -fsSLO https://raw.githubusercontent.com/taedeen/Myterm/main/deploy/bootstrap.sh` |
+| Scripts and Docker apps | Fetched over SSH with a read-only deploy key per server | Fetched over HTTPS, no key |
+| Release binaries (`myterm`) | Need the GitHub token | No token (GitHub allows 60 requests an hour without one) |
+| `deploy-apk.sh` | Token: every repository it can see, releases and build artifacts | No token: release APKs of the repositories in `~/.config/apk/public-repos` (default `taedeen/Myterm`) |
+
+Servers set up while the repository was private keep using their deploy key
+after it goes public; that keeps working.
+
 ## Set up a server (server1 or any other)
 
 You need SSH access to the server, a user with `sudo`, and Docker if it will

@@ -38,8 +38,14 @@ your own address (this guide writes it as `https://myterm.example.com`), and
 is installed and updated by `upgrade.sh`.
 
 **Once per server: the tools.** On a new Linux server, get `bootstrap.sh`
-from the repo's `deploy` folder. The repository is private, so either copy it
-from a server that already has it:
+from the repo's `deploy` folder. If the repository is public, that's one
+command, and nothing below needs a deploy key or token:
+
+```
+curl -fsSLO https://raw.githubusercontent.com/OWNER/Myterm/main/deploy/bootstrap.sh
+```
+
+If it's private, either copy it from a server that already has it:
 
 ```
 scp ~/.local/share/myterm-tools/deploy/bootstrap.sh NEWSERVER:
@@ -57,10 +63,10 @@ Then, on the new server:
 bash bootstrap.sh
 ```
 
-It installs what's missing, makes a read-only GitHub deploy key (add it at
-github.com/OWNER/Myterm → Settings → Deploy keys, write access off), links
-`upgrade.sh` and `deploy-apk.sh` into `~/bin`, and stores the GitHub token
-they use. After that, keep them current with:
+It installs what's missing, links `upgrade.sh` and `deploy-apk.sh` into
+`~/bin`, and, for a private repository only, makes a read-only GitHub deploy
+key (add it at github.com/OWNER/Myterm → Settings → Deploy keys, write access
+off) and stores the GitHub token the scripts use. After that, keep them current with:
 
 ```
 upgrade.sh --self-update

@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- **Server tools work with a public repository:** `bootstrap.sh` and
+  `upgrade.sh` fetch over HTTPS without a deploy key, release downloads need no
+  token, and `deploy-apk.sh` without a token installs public release APKs.
+  Private repositories work as before.
+- `upgrade.sh` says why GitHub refused a download (token rejected, no access,
+  private repository without a token) instead of "token, network?".
+- Windows: settings saved in quick succession no longer fail with "file in use".
+- The apps' hints no longer mention a personal host name.
+- User guide in `docs/user-guide.md`, with screenshots from the Screenshots
+  workflow.
+
 ## 0.4.0
 
 **MyTerm on the Linux command line (`myterm`)**, for x86_64 and aarch64
