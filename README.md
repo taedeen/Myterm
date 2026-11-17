@@ -4,6 +4,8 @@ A multi-platform SSH management tool: connect to many hosts, with autocomplete, 
 
 Build order: **foundation → Android → Windows**, then Linux and iOS.
 
+**Using MyTerm:** see the [user guide](docs/user-guide.md): deploying the sync server, installing the apps, and everyday use.
+
 ## Repository layout
 
 ```
