@@ -54,19 +54,24 @@ class SyncService extends ChangeNotifier {
     return t == null ? null : DateTime.fromMillisecondsSinceEpoch(t);
   }
 
-  /// Default server: the MyTerm sync server behind the home reverse proxy.
-  static const defaultUrl = 'https://myterm.example.com';
+  /// Shown as an example only: there's no built-in server. The address
+  /// entered last is remembered (see [lastUrl]).
+  static const exampleUrl = 'https://myterm.example.com';
+
+  /// The server address used last on this device, kept after Stop syncing so
+  /// joining again starts with it filled in.
+  String? get lastUrl => (_meta['lastSyncUrl'] ?? _meta['syncUrl']) as String?;
 
   static String normaliseUrl(String raw) {
     var u = raw.trim();
-    if (u.isEmpty) u = defaultUrl;
+    if (u.isEmpty) throw SyncError('Enter your sync server address, like $exampleUrl');
     if (!u.contains('://')) u = 'https://$u';
     while (u.endsWith('/')) {
       u = u.substring(0, u.length - 1);
     }
     final parsed = Uri.tryParse(u);
     if (parsed == null || !(parsed.scheme == 'http' || parsed.scheme == 'https') || parsed.host.isEmpty) {
-      throw SyncError('Enter a server address like $defaultUrl');
+      throw SyncError('Enter a server address like $exampleUrl');
     }
     return u;
   }
@@ -182,6 +187,7 @@ class SyncService extends ChangeNotifier {
   Future<void> _saveConfig(String base, String name) async {
     _meta
       ..['syncUrl'] = base
+      ..['lastSyncUrl'] = base
       ..['syncVaultName'] = name.trim().toLowerCase()
       ..['syncCursor'] = 0;
     await state.writeMeta();

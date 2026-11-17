@@ -30,7 +30,7 @@ myterm                      # pick a host and connect
 | Scope | Gets | For |
 |---|---|---|
 | full | everything, stored passwords and keys included | your own laptop |
-| certs (default) | hosts, snippets, history, known hosts, an SSH certificate; no stored passwords or keys | servers such as server1 |
+| certs (default) | hosts, snippets, history, known hosts, an SSH certificate; no stored passwords or keys | servers |
 | hosts | hosts, snippets, history, known hosts | shared machines |
 
 ## Commands
@@ -42,7 +42,7 @@ myterm                      # pick a host and connect
 | `myterm ssh server1 --tmux` | run in tmux on the server and reattach after a drop (`myterm-1` = the app's first tab) |
 | `myterm ssh server1 -- uptime` | run one command |
 | `myterm run 'df -h /' -t homelab` | run on every host tagged homelab, in parallel, output per host |
-| `myterm multi server1 pi` | tmux panes on this machine, typing sent to all |
+| `myterm multi server1 server2` | tmux panes on this machine, typing sent to all |
 | `myterm hosts [words] [--json]` | list hosts |
 | `myterm import [~/.ssh/config]` | add hosts from an OpenSSH config |
 | `myterm cert [--renew] [--trust]` | this device's SSH certificate; `--trust` makes this machine's sshd accept MyTerm certificates |

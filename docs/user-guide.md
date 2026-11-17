@@ -1,7 +1,6 @@
 # MyTerm user guide
 
-How to deploy MyTerm and use it day to day. (The editable copy of this guide
-is a separate doc; this file is kept in step with it.)
+How to deploy MyTerm and use it day to day.
 
 - [Overview](#overview)
 - [Deploy the sync server](#deploy-the-sync-server)

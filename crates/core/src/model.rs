@@ -214,7 +214,7 @@ mod tests {
         Host {
             id: "truenas".into(),
             label: "truenas".into(),
-            address: " 192.0.2.59 ".into(),
+            address: " 198.51.100.59 ".into(),
             group_id: Some("nas".into()),
             settings: Overrides { port: Some(22), ..Default::default() },
             ..Default::default()
@@ -224,7 +224,7 @@ mod tests {
     #[test]
     fn nearest_value_wins_and_env_merges() {
         let r = resolve(&host(), &groups()).unwrap();
-        assert_eq!(r.address, "192.0.2.59");
+        assert_eq!(r.address, "198.51.100.59");
         assert_eq!(r.port, 22, "host override beats root group");
         assert_eq!(r.identity_id.as_deref(), Some("id-admin"), "inherited from root");
         assert_eq!(r.jump_chain, vec!["bastion".to_string()], "inherited from nas");

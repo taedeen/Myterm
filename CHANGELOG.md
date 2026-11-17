@@ -9,7 +9,11 @@
 - `upgrade.sh` says why GitHub refused a download (token rejected, no access,
   private repository without a token) instead of "token, network?".
 - Windows: settings saved in quick succession no longer fail with "file in use".
-- The apps' hints no longer mention a personal host name.
+- **No built-in sync server address:** the apps and `myterm join` ask for
+  yours (`https://myterm.example.com` is shown as an example) and remember the
+  last one entered, also after Stop syncing. `myterm join` takes the address
+  as an optional argument.
+- The apps' hints, docs and tests use example names and addresses only.
 - User guide in `docs/user-guide.md`, with screenshots from the Screenshots
   workflow.
 

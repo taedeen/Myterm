@@ -119,7 +119,7 @@ class SyncSetupScreen extends StatefulWidget {
 }
 
 class _SyncSetupScreenState extends State<SyncSetupScreen> {
-  final _url = TextEditingController(text: SyncService.defaultUrl);
+  late final _url = TextEditingController(text: widget.state.sync.lastUrl ?? '');
   final _token = TextEditingController();
   final _name = TextEditingController();
   final _password = TextEditingController();
@@ -202,7 +202,7 @@ class _SyncSetupScreenState extends State<SyncSetupScreen> {
           controller: _url,
           keyboardType: TextInputType.url,
           autocorrect: false,
-          decoration: dec('Server address', 'Default ${SyncService.defaultUrl}').copyWith(suffixIcon: _pasteInto(_url)),
+          decoration: dec('Server address', 'e.g. ${SyncService.exampleUrl}').copyWith(suffixIcon: _pasteInto(_url)),
         ),
         const SizedBox(height: 12),
         TextField(

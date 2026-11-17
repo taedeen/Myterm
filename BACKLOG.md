@@ -49,22 +49,16 @@ Home Assistant actions, TPM keys on Windows, iOS.
   automation through the sync server.
 
 ## Build and release
-- **No personal server address in the apps.** `https://myterm.example.com`
-  is personal and must not ship: remove it from
-  `apps/mobile/lib/src/sync_service.dart` (`defaultUrl`),
-  `crates/cli/src/sync.rs` (`DEFAULT_URL`) and the repo docs (server README),
-  using `https://myterm.example.com` only as the placeholder hint. The first
-  Sync setup or `myterm join` asks for the address; each device then
-  remembers the last one entered and fills it in next time (Create, Join,
-  rejoin after Stop syncing).
+- ✅ **No built-in server address.** The apps and `myterm join` ask for the sync
+  server's address (`https://myterm.example.com` is only an example) and
+  remember the last one entered, also after Stop syncing.
 
 ## Platforms
 - ✅ 0.4.0 ⭐ **Linux command line (`myterm`).** One Rust binary on the shared crates:
   `myterm ssh` with autocomplete and the password key, `myterm agent` plus a
   generated `~/.ssh/config` so plain ssh/scp/rsync/git use MyTerm's keys,
   certificates and jump hosts, parallel `run` across tagged hosts, per-device
-  sync scopes (servers get hosts and certificates, not passwords). Design:
-  "MyTerm: Backlog review and Linux command-line design".
+  sync scopes (servers get hosts and certificates, not passwords).
   Still to do from that design: `myterm agent` + `ssh-config --install`
   (plain ssh/scp/git using MyTerm keys), `known-hosts --export`, a `.deb`,
   moving the apps onto the Rust sync client.

@@ -24,16 +24,16 @@ The scripts work either way and check for themselves:
 Servers set up while the repository was private keep using their deploy key
 after it goes public; that keeps working.
 
-## Set up a server (server1 or any other)
+## Set up a server
 
 You need SSH access to the server, a user with `sudo`, and Docker if it will
 run Docker apps. Each server gets **its own** read-only deploy key: GitHub
 allows a deploy key on one repository only, and a lost server's key can then
 be removed without touching the others.
 
-**1. Copy `bootstrap.sh` to the server.** The repository is private, so the
-server can't download it before it has a key. From a machine that has it
-(server1, after its own setup):
+**1. Copy `bootstrap.sh` to the server.** If the repository is public,
+download it there (see the table above). If it's private, the server can't
+download it before it has a key; copy it from a server that already has it:
 ```sh
 scp ~/.local/share/myterm-tools/deploy/bootstrap.sh NEWSERVER:
 ```
@@ -69,8 +69,9 @@ For an app from another private repository, give it its own SSH alias in
 `remote` (`git@github-NAME:owner/repo.git`). `--setup` creates that
 repository's deploy key and SSH entry, and tells you where to add the key.
 
-**On server1**, which already has `upgrade.sh` in `~/bin` and the `github-myterm`
-key: run `bash bootstrap.sh` as well. It reuses the key, keeps your
+**On a server set up before bootstrap.sh existed**, which already has
+`upgrade.sh` in `~/bin` and the `github-myterm` key: run `bash bootstrap.sh`
+as well. It reuses the key, keeps your
 `apps.conf`, and turns `~/bin/upgrade.sh` into a self-updating link. Your
 old `~/bin/fetch-apk.sh` and `deploy-apk.sh` aren't touched; the new
 `deploy-apk.sh` replaces both.

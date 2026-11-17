@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# upgrade.sh: install and upgrade server1's apps from their GitHub repositories: Docker apps
+# upgrade.sh: install and upgrade a server's apps from their GitHub repositories: Docker apps
 # (from git) and release binaries such as the myterm command line.
 #
 #   upgrade.sh                    upgrade every app in the list (only those with something new)

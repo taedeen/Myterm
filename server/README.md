@@ -8,7 +8,7 @@ no third-party Python packages.
 derived from the vault master key before uploading. The server stores opaque
 record keys and ciphertext, and keeps nothing that can decrypt them.
 
-## Run it (e.g. on `server1`)
+## Run it
 
 The easy way is `upgrade.sh --setup myterm-sync` (see `deploy/README.md`): it
 does all of the below and keeps the server up to date. By hand:
@@ -29,9 +29,9 @@ Without Docker: `MYTERM_SYNC_TOKEN=... MYTERM_SYNC_DB=./data/sync.db python -m m
 
 ## Connect your devices
 
-1. **First device:** Settings → Sync → *New sync vault*. The server address
-   defaults to `https://myterm.example.com` (the reverse proxy in front
-   of this container); enter the server token and a vault name.
+1. **First device:** Settings → Sync → *New sync vault*. Enter your server's
+   address (e.g. `https://myterm.example.com`, the reverse proxy in front of
+   this container; the device remembers it), the server token and a vault name.
 2. **Every other device:** Settings → Sync → *Join existing*. Same address,
    token and vault name, plus the **master password of the first device's
    vault**. The joining device's own hosts and credentials are kept and merged
@@ -106,7 +106,7 @@ ends when its last certificate expires (revoke it first so it can't renew).
 
 1. Turn it on in `server/.env` (then `upgrade.sh myterm-sync`):
    ```
-   MYTERM_SYNC_CERT_PRINCIPALS=youruser,root   # login names certificates allow
+   MYTERM_SYNC_CERT_PRINCIPALS=youruser,root  # login names certificates allow
    MYTERM_SYNC_CERT_HOURS=8                   # 1-168
    ```
    The CA key is created as `data/ssh_user_ca` on first start. Back it up

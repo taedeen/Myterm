@@ -12,7 +12,8 @@ use serde_json::{json, Value};
 
 use crate::store::{Scope, Store};
 
-pub const DEFAULT_URL: &str = "https://myterm.example.com";
+/// Shown as an example only: there's no built-in server.
+pub const EXAMPLE_URL: &str = "https://myterm.example.com";
 
 #[derive(Debug)]
 pub struct HttpError {
@@ -31,7 +32,7 @@ impl std::error::Error for HttpError {}
 pub fn normalise_url(raw: &str) -> Result<String> {
     let mut u = raw.trim().to_string();
     if u.is_empty() {
-        u = DEFAULT_URL.into();
+        bail!("enter your sync server's address, like {EXAMPLE_URL}");
     }
     if !u.contains("://") {
         u = format!("https://{u}");
@@ -40,7 +41,7 @@ pub fn normalise_url(raw: &str) -> Result<String> {
         u.pop();
     }
     if !(u.starts_with("https://") || u.starts_with("http://")) || u.split("://").nth(1).unwrap_or("").is_empty() {
-        bail!("enter a server address like {DEFAULT_URL}");
+        bail!("enter a server address like {EXAMPLE_URL}");
     }
     Ok(u)
 }
@@ -331,7 +332,7 @@ mod tests {
 
     #[test]
     fn urls_are_normalised() {
-        assert_eq!(normalise_url("").unwrap(), DEFAULT_URL);
+        assert!(normalise_url("").is_err(), "no built-in server");
         assert_eq!(normalise_url("sync.example.com/").unwrap(), "https://sync.example.com");
         assert_eq!(normalise_url("http://10.0.0.2:7341").unwrap(), "http://10.0.0.2:7341");
         assert!(normalise_url("ftp://x").is_err());
@@ -339,6 +340,6 @@ mod tests {
 
     #[test]
     fn names_are_url_encoded() {
-        assert_eq!(urlencode("home home"), "home%20home");
+        assert_eq!(urlencode("my home"), "my%20home");
     }
 }
