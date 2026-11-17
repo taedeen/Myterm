@@ -25,6 +25,11 @@ Home Assistant actions, TPM keys on Windows, iOS.
 - **Snippet library:** folders, per-host snippets, run-on-connect commands.
 - **SFTP file browser:** browse, upload, download, view logs.
 - **Search the scrollback,** highlighting errors and IP addresses.
+- **Clickable links in the terminal.** Underline URLs in terminal output in the
+  apps and `myterm` (http, https, and bare hostnames such as `example.com/path`).
+  Phone: tap opens it in the browser, long-press copies. Windows: Ctrl+click opens,
+  right-click offers Open or Copy. CLI: emit OSC 8 hyperlinks so terminals that
+  support them make URLs clickable.
 - **Session recording** for replay and change records.
 
 ## Security
