@@ -7,7 +7,7 @@
 //!   key whose private part never leaves the device (spec 3.4.1)
 //! - run an interactive shell with a PTY and stream output to the app
 //!
-//! NOTE: written against russh 0.54. The `russh` API has changed between
+//! NOTE: written against russh 0.65. The `russh` API has changed between
 //! minor versions; CI builds this crate and is the source of truth.
 
 use std::sync::Arc;
@@ -19,9 +19,10 @@ use myterm_core::session::Channel as CoreChannel;
 use myterm_core::signer::{self, Protection};
 use myterm_core::sshkey;
 use russh::client::{self, Handle};
+use russh::keys::agent::AgentIdentity;
 use russh::keys::ssh_key::{self, HashAlg};
-use russh::keys::PrivateKeyWithHashAlg;
-use russh::{ChannelMsg, CryptoVec};
+use russh::keys::{PrivateKeyWithHashAlg, PublicKeyOrCertificate};
+use russh::ChannelMsg;
 use tokio::sync::{mpsc, Mutex};
 
 #[derive(Debug, thiserror::Error)]
@@ -161,8 +162,10 @@ struct Verifier {
 impl client::Handler for Verifier {
     type Error = russh::Error;
 
-    async fn check_server_key(&mut self, server_public_key: &ssh_key::PublicKey) -> Result<bool, Self::Error> {
-        let blob = match server_public_key.to_bytes() {
+    async fn check_server_key(&mut self, server_key: &PublicKeyOrCertificate) -> Result<bool, Self::Error> {
+        // A host certificate is checked by the key it certifies, like any other
+        // host key: MyTerm trusts keys, not host CAs.
+        let blob = match server_key.public_key().to_bytes() {
             Ok(b) => b,
             Err(_) => return Ok(false),
         };
@@ -202,19 +205,17 @@ struct HardwareAuthSigner(Arc<dyn AsyncDerSigner>);
 impl russh::Signer for HardwareAuthSigner {
     type Error = SshError;
 
-    async fn auth_publickey_sign(
+    async fn auth_sign(
         &mut self,
-        _key: &ssh_key::PublicKey,
+        _key: &AgentIdentity,
         _hash_alg: Option<HashAlg>,
-        mut to_sign: CryptoVec,
-    ) -> Result<CryptoVec, Self::Error> {
-        let der = self.0.sign_der(to_sign.to_vec()).await.map_err(SshError::Signer)?;
+        mut to_sign: Vec<u8>,
+    ) -> Result<Vec<u8>, Self::Error> {
+        let der = self.0.sign_der(to_sign.clone()).await.map_err(SshError::Signer)?;
         let sig = sshkey::der_to_ssh_ecdsa_signature(&der).map_err(|e| SshError::Signer(e.to_string()))?;
         // russh expects the signed data with the SSH signature string appended,
-        // matching its agent-client signer.
-        let mut tail = Vec::with_capacity(sig.len() + 4);
-        sshkey::put_string(&mut tail, &sig);
-        to_sign.extend(&tail);
+        // as its agent client's sign_request returns it.
+        sshkey::put_string(&mut to_sign, &sig);
         Ok(to_sign)
     }
 }
