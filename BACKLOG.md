@@ -25,6 +25,11 @@ Home Assistant actions, TPM keys on Windows, iOS.
 - **Snippet library:** folders, per-host snippets, run-on-connect commands.
 - **SFTP file browser:** browse, upload, download, view logs.
 - **Search the scrollback,** highlighting errors and IP addresses.
+- **Clickable links in the terminal.** Underline URLs in terminal output in the
+  apps and `myterm` (http, https, and bare hostnames such as `example.com/path`).
+  Phone: tap opens it in the browser, long-press copies. Windows: Ctrl+click opens,
+  right-click offers Open or Copy. CLI: emit OSC 8 hyperlinks so terminals that
+  support them make URLs clickable.
 - **Session recording** for replay and change records.
 
 ## Security
@@ -43,13 +48,17 @@ Home Assistant actions, TPM keys on Windows, iOS.
 - **Home Assistant actions:** run a host's snippet from an HA dashboard or
   automation through the sync server.
 
+## Build and release
+- ✅ **No built-in server address.** The apps and `myterm join` ask for the sync
+  server's address (`https://myterm.example.com` is only an example) and
+  remember the last one entered, also after Stop syncing.
+
 ## Platforms
 - ✅ 0.4.0 ⭐ **Linux command line (`myterm`).** One Rust binary on the shared crates:
   `myterm ssh` with autocomplete and the password key, `myterm agent` plus a
   generated `~/.ssh/config` so plain ssh/scp/rsync/git use MyTerm's keys,
   certificates and jump hosts, parallel `run` across tagged hosts, per-device
-  sync scopes (servers get hosts and certificates, not passwords). Design:
-  "MyTerm: Backlog review and Linux command-line design".
+  sync scopes (servers get hosts and certificates, not passwords).
   Still to do from that design: `myterm agent` + `ssh-config --install`
   (plain ssh/scp/git using MyTerm keys), `known-hosts --export`, a `.deb`,
   moving the apps onto the Rust sync client.

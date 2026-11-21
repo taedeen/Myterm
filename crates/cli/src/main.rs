@@ -34,9 +34,9 @@ struct Cli {
 enum Cmd {
     /// Join your vault through the sync server (once per machine)
     Join {
-        /// Sync server address
-        #[arg(default_value = sync::DEFAULT_URL)]
-        url: String,
+        /// Sync server address, e.g. https://myterm.example.com (asked if left out;
+        /// the one used last is offered)
+        url: Option<String>,
         /// Vault name (asked if left out)
         #[arg(long)]
         name: Option<String>,
@@ -276,6 +276,19 @@ fn real_main(cli: Cli) -> Result<u8> {
             if store.has_vault() && !prompt::yes("This machine has already joined a vault. Join again?", false)? {
                 return Ok(0);
             }
+            let url = match url {
+                Some(u) => u,
+                None => {
+                    let last = store.str("syncUrl").unwrap_or_default();
+                    let q = if last.is_empty() {
+                        format!("Sync server address (e.g. {})", sync::EXAMPLE_URL)
+                    } else {
+                        "Sync server address".to_string()
+                    };
+                    prompt::ask(&q, &last)?
+                }
+            };
+            let url = sync::normalise_url(&url)?;
             println!("Joining your MyTerm vault through {url}.");
             let token = prompt::secret("Server token (MYTERM_SYNC_TOKEN on the sync server): ")?;
             let name = match name {

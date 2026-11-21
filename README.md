@@ -4,6 +4,8 @@ A multi-platform SSH management tool: connect to many hosts, with autocomplete, 
 
 Build order: **foundation → Android → Windows**, then Linux and iOS.
 
+**Using MyTerm:** see the [user guide](docs/user-guide.md): deploying the sync server, installing the apps, and everyday use.
+
 ## Repository layout
 
 ```
@@ -76,7 +78,7 @@ The app needs Android 11 (API 30) or later, for per-use Keystore authentication.
 
 ## Status
 
-Version 0.4.0 (see [CHANGELOG.md](CHANGELOG.md)).
+Version 0.5.0 (see [CHANGELOG.md](CHANGELOG.md)).
 
 | Part | State |
 |---|---|

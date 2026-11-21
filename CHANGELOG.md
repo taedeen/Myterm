@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.0
+
+**Ready for a public repository, with a user guide.**
+
+- **Server tools work with a public repository:** `bootstrap.sh` and
+  `upgrade.sh` fetch over HTTPS without a deploy key, release downloads need no
+  token, and `deploy-apk.sh` without a token installs public release APKs.
+  Private repositories work as before.
+- `upgrade.sh` says why GitHub refused a download (token rejected, no access,
+  private repository without a token) instead of "token, network?".
+- Windows: settings saved in quick succession no longer fail with "file in use".
+- **No built-in sync server address:** the apps and `myterm join` ask for
+  yours (`https://myterm.example.com` is shown as an example) and remember the
+  last one entered, also after Stop syncing. `myterm join` takes the address
+  as an optional argument.
+- The apps' hints, docs and tests use example names and addresses only.
+- User guide in `docs/user-guide.md`, with screenshots from the Screenshots
+  workflow.
+
 ## 0.4.0
 
 **MyTerm on the Linux command line (`myterm`)**, for x86_64 and aarch64

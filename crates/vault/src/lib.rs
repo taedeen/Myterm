@@ -354,7 +354,7 @@ mod sync_tests {
         // Desk already had its own vault with a host, then joins with the password.
         let mut desk = Vault::new("desk");
         desk.unlock(MasterKey::generate());
-        desk.put("host", "nas", "address", b"192.0.2.59", 5).unwrap();
+        desk.put("host", "nas", "address", b"198.51.100.59", 5).unwrap();
         let joined = unwrap_master_key(&wrapped, &derive_password_key(b"correct horse", &password_kdf).unwrap(), "password").unwrap();
         assert_eq!(*joined.derive("sync-auth"), *phone.derive("sync-auth").unwrap(), "same vault token");
         desk.rekey(joined).unwrap();
@@ -367,7 +367,7 @@ mod sync_tests {
 
         for v in [&phone, &desk] {
             assert_eq!(&*v.get("server1", "address").unwrap(), b"192.0.2.17");
-            assert_eq!(&*v.get("nas", "address").unwrap(), b"192.0.2.59", "desk's own host kept");
+            assert_eq!(&*v.get("nas", "address").unwrap(), b"198.51.100.59", "desk's own host kept");
             assert_eq!(v.secret("pw").unwrap().expose(), b"s3cret");
         }
 

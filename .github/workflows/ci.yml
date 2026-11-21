@@ -66,7 +66,7 @@ jobs:
           docker rm -f sync
 
   linux:
-    # The `myterm` command line, for server1, a Raspberry Pi or a Linux laptop.
+    # The `myterm` command line, for servers, a Raspberry Pi or a Linux laptop.
     # Built on Ubuntu 22.04 (glibc 2.35), so it runs on Debian 12, Ubuntu
     # 22.04+ and Raspberry Pi OS (bookworm) and later.
     name: Linux command line (${{ matrix.arch }})

@@ -1,0 +1,224 @@
+# Screenshots for the user guide, from the real apps with a demo vault:
+# Android (emulator) and Windows, each against a throwaway SSH server and
+# sync server on the runner. Output: the "screenshots-*" artifacts.
+# Test: apps/mobile/integration_test/screenshots_test.dart.
+name: Screenshots
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [screenshots]
+
+concurrency:
+  group: screenshots-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Throwaway values: they exist only on the runner for this run.
+  DEMO_PASSWORD: Ex4mple-Passw0rd-2026
+  DEMO_SYNC_TOKEN: demo-sync-token-0123456789abcdef
+
+jobs:
+  android:
+    name: Android screenshots
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Free disk space (the emulator needs ~8 GB)
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /usr/local/.ghcup /usr/share/swift /opt/hostedtoolcache/CodeQL
+          df -h /
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk,flutter_rust_bridge_codegen@2.11.1
+      - name: Prepare Android build (emulator only)
+        env:
+          MYTERM_ANDROID_TARGETS: x86_64
+        run: |
+          apps/mobile/tool/prepare_android.sh
+          rm -rf target   # the Rust library is in jniLibs now
+          df -h /
+      - name: Demo SSH server (users demo = server1, ops = server2)
+        run: |
+          sudo apt-get install -y -qq openssh-server > /dev/null
+          printf 'PasswordAuthentication yes\nKbdInteractiveAuthentication yes\nPrintLastLog no\n' |
+            sudo tee /etc/ssh/sshd_config.d/00-demo.conf > /dev/null
+          for pair in demo:server1 ops:server2; do
+            u="${pair%%:*}"; h="${pair##*:}"
+            sudo useradd -m -s /bin/bash "$u"
+            echo "$u:$DEMO_PASSWORD" | sudo chpasswd
+            sudo touch "/home/$u/.hushlogin"
+            printf '%s\n' "PS1='\\[\\e[01;32m\\]\\u@$h\\[\\e[00m\\]:\\[\\e[01;34m\\]\\w\\[\\e[00m\\]\\\$ '" |
+              sudo tee -a "/home/$u/.bashrc" > /dev/null
+          done
+          # Both demo hosts are this runner; it answers as server1.
+          sudo hostnamectl set-hostname server1
+          echo "127.0.1.1 server1" | sudo tee -a /etc/hosts > /dev/null
+          sudo systemctl restart ssh
+      - name: Demo sync server
+        run: |
+          mkdir -p "$RUNNER_TEMP/sync"
+          cd server
+          MYTERM_SYNC_TOKEN="$DEMO_SYNC_TOKEN" MYTERM_SYNC_CERT_PRINCIPALS=demo,ops \
+            nohup python3 -m myterm_sync --port 7341 --db "$RUNNER_TEMP/sync/sync.db" > "$RUNNER_TEMP/sync/log.txt" 2>&1 &
+          for i in $(seq 30); do curl -fsS http://127.0.0.1:7341/v1/health && break; sleep 1; done
+      - name: Build the test app before starting the emulator (both at once ran out of memory)
+        working-directory: apps/mobile
+        run: |
+          flutter build apk --debug -t integration_test/screenshots_test.dart \
+            --dart-define=DEMO_SSH_HOST=10.0.2.2 --dart-define=DEMO_SYNC_URL=http://10.0.2.2:7341 \
+            --dart-define=DEMO_SYNC_TOKEN=$DEMO_SYNC_TOKEN --dart-define=DEMO_PASSWORD=$DEMO_PASSWORD
+          (cd android && ./gradlew --stop) || true
+          free -m
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Screenshots on the emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 31
+          arch: x86_64
+          target: google_apis
+          profile: pixel_6
+          ram-size: 3072M
+          emulator-boot-timeout: 1200
+          disk-size: 4096M
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          script: cd apps/mobile && flutter drive --driver=test_driver/integration_test.dart --target=integration_test/screenshots_test.dart -d emulator-5554 --use-application-binary=build/app/outputs/flutter-apk/app-debug.apk
+      - name: Sync server log
+        if: always()
+        run: cat "$RUNNER_TEMP/sync/log.txt" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshots-android
+          path: apps/mobile/screenshots/
+          if-no-files-found: warn
+
+  windows:
+    name: Windows screenshots
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: flutter_rust_bridge_codegen@2.11.1
+      - name: Build
+        run: apps/mobile/tool/prepare_windows.sh
+      - name: Demo SSH server (OpenSSH with Git Bash; demo = server1, ops = server2)
+        shell: pwsh
+        run: |
+          if (-not (Get-Service sshd -ErrorAction SilentlyContinue)) {
+            $cap = Get-WindowsCapability -Online -Name 'OpenSSH.Server*' | Select-Object -First 1
+            Write-Host "OpenSSH.Server capability: $($cap.Name) $($cap.State)"
+            try { Add-WindowsCapability -Online -Name $cap.Name -ErrorAction Stop | Out-Null }
+            catch {
+              Write-Warning "Capability install failed ($_); using Chocolatey"
+              choco install openssh -y --no-progress --params '"/SSHServerFeature"' | Out-Null
+            }
+          }
+          New-Item -Path 'HKLM:\SOFTWARE\OpenSSH' -Force | Out-Null
+          New-ItemProperty -Path 'HKLM:\SOFTWARE\OpenSSH' -Name DefaultShell -Value 'C:\Program Files\Git\bin\bash.exe' -PropertyType String -Force | Out-Null
+          $pw = ConvertTo-SecureString $env:DEMO_PASSWORD -AsPlainText -Force
+          foreach ($u in 'demo', 'ops') { New-LocalUser -Name $u -Password $pw -PasswordNeverExpires | Out-Null }
+          $rc = @'
+
+          case "$(whoami)" in
+            demo) PS1='\[\e[01;32m\]demo@server1\[\e[00m\]:\[\e[01;34m\]\w\[\e[00m\]\$ ' ;;
+            ops) PS1='\[\e[01;32m\]ops@server2\[\e[00m\]:\[\e[01;34m\]\w\[\e[00m\]\$ ' ;;
+          esac
+          '@
+          Add-Content -Path 'C:\Program Files\Git\etc\bash.bashrc' -Value $rc
+          Start-Service sshd
+          # Log to C:\ProgramData\ssh\logs (before any Match block, which ends the file).
+          $cfg = 'C:\ProgramData\ssh\sshd_config'
+          # The runner image only lets some groups log in; the demo users aren't in them.
+          Get-Content $cfg | Select-String -Pattern '^\s*Allow(Groups|Users)' | ForEach-Object { Write-Host "removing: $_" }
+          $lines = Get-Content $cfg | Where-Object { $_ -notmatch '^\s*Allow(Groups|Users)' }
+          Set-Content -Path $cfg -Value (@('SyslogFacility LOCAL0', 'LogLevel VERBOSE') + $lines)
+          Restart-Service sshd
+          Get-Service sshd
+      - name: Check a demo login
+        continue-on-error: true
+        run: |
+          pip install -q paramiko
+          python - <<'EOF'
+          import os, paramiko
+          c = paramiko.SSHClient(); c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+          c.connect('127.0.0.1', username='demo', password=os.environ['DEMO_PASSWORD'], look_for_keys=False, allow_agent=False)
+          _, out, err = c.exec_command('whoami; echo $0; ls /')
+          print(out.read().decode(), err.read().decode())
+          ch = c.invoke_shell(); import time; time.sleep(3); ch.send('echo hello\r'); time.sleep(2); print(repr(ch.recv(4096)))
+          EOF
+      - name: Screenshots
+        run: |
+          mkdir -p "$RUNNER_TEMP/sync"
+          (cd server && MYTERM_SYNC_TOKEN="$DEMO_SYNC_TOKEN" MYTERM_SYNC_CERT_PRINCIPALS=demo,ops \
+            python -m myterm_sync --port 7341 --db "$RUNNER_TEMP/sync/sync.db" > "$RUNNER_TEMP/sync/log.txt" 2>&1 &)
+          for i in $(seq 30); do curl -fsS http://127.0.0.1:7341/v1/health && break; sleep 1; done
+          # myterm_ffi.dll for the debug build the test runs.
+          export PATH="$PWD/target/release:$PATH"
+          cd apps/mobile
+          flutter drive -d windows --driver=test_driver/integration_test.dart --target=integration_test/screenshots_test.dart \
+            --dart-define=DEMO_SSH_HOST=127.0.0.1 --dart-define=DEMO_SYNC_URL=http://127.0.0.1:7341 \
+            --dart-define=DEMO_SYNC_TOKEN="$DEMO_SYNC_TOKEN" --dart-define=DEMO_PASSWORD="$DEMO_PASSWORD"
+      - name: Sync server and sshd logs
+        if: always()
+        run: |
+          cat "$RUNNER_TEMP/sync/log.txt" || true
+          tail -50 /c/ProgramData/ssh/logs/sshd.log || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshots-windows
+          path: apps/mobile/screenshots/
+          if-no-files-found: warn
+
+  publish:
+    # The PNGs on branch guide-screenshots, to fetch with git.
+    name: Publish to branch guide-screenshots
+    needs: [android, windows]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: screenshots-*
+          path: shots
+          merge-multiple: true
+      - name: Push
+        run: |
+          ls -la shots
+          cd shots
+          git init -q -b guide-screenshots
+          git add .
+          git -c user.name="MyTerm CI" -c user.email="ci@localhost" commit -qm "Screenshots from run ${{ github.run_id }}"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" guide-screenshots

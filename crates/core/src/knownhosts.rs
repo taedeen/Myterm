@@ -133,7 +133,7 @@ mod tests {
         let blob = ed(5);
         let line = sshkey::authorized_keys_line(&blob, "").unwrap();
         let text = format!(
-            "# comment\nbronze,192.0.2.21 {line}\n|1|hashed= {line}\n@revoked * {line}\nbad line here\n"
+            "# comment\nweb1,192.0.2.21 {line}\n|1|hashed= {line}\n@revoked * {line}\nbad line here\n"
         );
         let (hosts, skipped) = import_openssh(&text, 7, "desk");
         assert_eq!(hosts.len(), 2);

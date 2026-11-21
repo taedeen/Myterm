@@ -20,6 +20,8 @@
 #
 # Needs: adb, curl, python3, and a read-only GitHub token in ~/.config/apk/github.token
 # (see deploy/README.md: fine-grained, all repositories, Actions + Contents read-only).
+# Without a token, only public repositories' release APKs are used: the ones listed in
+# ~/.config/apk/public-repos (one owner/name per line; default taedeen/Myterm).
 set -euo pipefail
 
 CONF_DIR="${APK_CONF_DIR:-$HOME/.config/apk}"
@@ -28,6 +30,7 @@ TOKEN_FILE="${APK_TOKEN_FILE:-$CONF_DIR/github.token}"
 KEEP="${APK_KEEP:-3}"
 CATALOG="$CONF_DIR/catalog.json"
 DEVICES="$CONF_DIR/adb-devices"   # one line per device: ip connect-port pairing-port model
+PUBLIC_REPOS="$CONF_DIR/public-repos"
 
 die()  { printf '\033[31m%s\033[0m\n' "$*" >&2; exit 1; }
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
@@ -50,15 +53,21 @@ command -v python3 >/dev/null || die "python3 is needed: sudo apt install python
 
 # ---------------------------------------------------------------- GitHub side (python)
 # One embedded helper does the API work: discovery, listing and downloads.
-gh_py() {
-  [ -f "$TOKEN_FILE" ] || [ -f "$HOME/.config/myjam/github-apk.token" ] || die \
-"No GitHub token. Create a fine-grained token (all repositories; Actions: read, Contents: read),
-then: printf '%s' TOKEN > $TOKEN_FILE && chmod 600 $TOKEN_FILE"
-  py "$@"
+gh_py() { py "$@"; }
+
+no_token_note() {   # once per run, before the GitHub work
+  [ -f "$TOKEN_FILE" ] || [ -f "$HOME/.config/myjam/github-apk.token" ] && return 0
+  echo "No GitHub token: public releases only ($(public_repos | tr '\n' ' '| sed 's/ $//')). For private repositories,
+create a read-only token and: printf '%s' TOKEN > $TOKEN_FILE && chmod 600 $TOKEN_FILE" >&2
+}
+
+public_repos() {
+  if [ -s "$PUBLIC_REPOS" ]; then grep -v '^[[:space:]]*\(#\|$\)' "$PUBLIC_REPOS"; else echo taedeen/Myterm; fi
 }
 
 py() {
   APK_TOKEN_FILE="$TOKEN_FILE" APK_CATALOG="$CATALOG" APK_STORE="$STORE" APK_KEEP="$KEEP" \
+    APK_PUBLIC_REPOS="$(public_repos | tr '\n' ' ')" \
     python3 - "$@" <<'PY'
 import io, json, os, re, sys, time, urllib.request, urllib.error, zipfile
 
@@ -68,10 +77,13 @@ if not os.path.exists(TOKEN_FILE):                       # the old MyJam-only to
 _token = None
 
 def token():
+    """The token, or "" without one (then only public repositories' releases are used)."""
     global _token
     if _token is None:
-        _token = open(TOKEN_FILE).read().strip()
+        _token = open(TOKEN_FILE).read().strip() if os.path.exists(TOKEN_FILE) else ""
     return _token
+
+PUBLIC = os.environ.get("APK_PUBLIC_REPOS", "").split()
 
 CATALOG = os.environ["APK_CATALOG"]
 STORE = os.environ["APK_STORE"]
@@ -91,7 +103,8 @@ opener = urllib.request.build_opener(NoRedirectAuth)
 
 def get(url, raw=False, accept="application/vnd.github+json"):
     req = urllib.request.Request(url if url.startswith("http") else API + url)
-    req.add_header("Authorization", f"Bearer {token()}")
+    if token():
+        req.add_header("Authorization", f"Bearer {token()}")
     req.add_header("Accept", accept)
     req.add_header("X-GitHub-Api-Version", "2022-11-28")
     for attempt in range(3):
@@ -100,7 +113,7 @@ def get(url, raw=False, accept="application/vnd.github+json"):
                 data = r.read()
             return data if raw else json.loads(data)
         except urllib.error.HTTPError as e:
-            if e.code in (401, 403) and attempt == 0:
+            if e.code in (401, 403) and attempt == 0 and token():
                 msg = e.read().decode(errors="replace")[:200]
                 sys.exit(f"GitHub refused the token ({e.code}): {msg}\nCheck it hasn't expired and has Actions + Contents read access.")
             if e.code >= 500 and attempt < 2:
@@ -167,7 +180,9 @@ def candidates(repo, cat):
                     break
         except urllib.error.HTTPError:
             pass
-    # Actions artifacts.
+    # Actions artifacts (downloading them needs a token, even from a public repository).
+    if not token():
+        return out
     try:
         arts = [a for a in get(f"/repos/{full}/actions/artifacts?per_page=100")["artifacts"] if not a["expired"]]
     except urllib.error.HTTPError:
@@ -204,7 +219,17 @@ def scan(refresh=False):
     if refresh:
         cat["families"] = {}
     apps = []
-    for repo in paged("/user/repos?affiliation=owner,collaborator,organization_member&sort=pushed"):
+    if token():
+        repos = paged("/user/repos?affiliation=owner,collaborator,organization_member&sort=pushed")
+    else:
+        def public():
+            for full in PUBLIC:
+                try:
+                    yield get(f"/repos/{full}")
+                except urllib.error.HTTPError as e:
+                    print(f"{full}: not readable without a token ({e.code}); is it private?", file=sys.stderr)
+        repos = public()
+    for repo in repos:
         apps += candidates(repo, cat)
     cat["apps"] = apps
     cat["scanned"] = int(time.time())
@@ -489,6 +514,8 @@ install_apk() {   # install_apk APK
 }
 
 # ---------------------------------------------------------------- main
+case "${1:-}" in -h|--help) ;; *) [ -n "${1:-}" ] && [ -f "$1" ] || no_token_note ;; esac
+
 case "${1:-}" in
   -h|--help) awk 'NR > 1 && !/^#/ {exit} NR > 1' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   --list)    gh_py list ;;

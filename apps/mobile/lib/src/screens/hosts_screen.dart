@@ -320,7 +320,7 @@ class _HostEditScreenState extends State<HostEditScreen> {
         DropdownButtonFormField<String?>(
           value: jumpHosts.any((h) => h.id == _jumpHostId) ? _jumpHostId : null,
           decoration: dec('Connect via (jump host)').copyWith(
-            helperText: 'For machines only reachable through another host, e.g. server1',
+            helperText: 'For machines only reachable through another host',
           ),
           items: [
             const DropdownMenuItem(value: null, child: Text('Direct')),

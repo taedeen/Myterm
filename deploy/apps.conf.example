@@ -5,7 +5,7 @@
 #   remote      Git URL. Use an SSH alias per repo (git@github-NAME:owner/repo.git): --setup creates
 #               a read-only deploy key and the ~/.ssh/config entry for it.
 #   branch      Branch to follow (default main).
-#   dir         Where the app lives on server1 (a Git checkout).
+#   dir         Where the app lives on this server (a Git checkout).
 #   subdir      Optional: only this folder of the repository is checked out, and Docker Compose
 #               runs there (for repos holding more than one app, e.g. MyTerm's server/).
 #   version     Optional: FILE:REGEX, first capture group = version. Default: the commit.

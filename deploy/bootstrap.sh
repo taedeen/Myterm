@@ -5,12 +5,17 @@
 #
 # What it does, asking before anything that needs sudo:
 #   1. checks the tools these scripts use (git, curl, python3, docker compose; sqlite3, adb optional),
-#   2. creates a read-only deploy key for the Myterm repository and the SSH alias github-myterm,
-#      and waits while you add the key on GitHub,
+#   2. if the Myterm repository is private: creates a read-only deploy key and the SSH alias
+#      github-myterm, and waits while you add the key on GitHub (a public one needs neither),
 #   3. checks out just the repository's deploy/ folder into ~/.local/share/myterm-tools,
 #   4. links upgrade.sh and deploy-apk.sh into ~/bin (so `upgrade.sh --self-update` keeps them current),
 #   5. creates ~/.config/upgrade/apps.conf (empty list, with examples) if there isn't one,
-#   6. optionally stores the GitHub token deploy-apk.sh uses.
+#   6. optionally stores the GitHub token deploy-apk.sh uses (not needed for public repositories).
+#
+# Get this file: from a public repository,
+#   curl -fsSLO https://raw.githubusercontent.com/taedeen/Myterm/main/deploy/bootstrap.sh
+# from a private one, copy it from a server that has it, or download it with your token
+# (see docs/user-guide.md).
 # Safe to run again: each step is skipped when it's already done.
 set -euo pipefail
 
@@ -18,7 +23,8 @@ REPO="taedeen/Myterm"
 ALIAS="github-myterm"
 BRANCH="${MYTERM_TOOLS_BRANCH:-main}"
 TOOLS="$HOME/.local/share/myterm-tools"
-REMOTE="${MYTERM_TOOLS_REMOTE:-git@$ALIAS:$REPO.git}"   # override only for testing
+REMOTE_SSH="git@$ALIAS:$REPO.git"
+REMOTE_HTTPS="https://github.com/$REPO.git"
 KEY="$HOME/.ssh/${ALIAS}_deploy"
 HOST="$(hostname -s)"
 
@@ -31,7 +37,14 @@ yes_no() { local a; read -r -p "$1 [y/N] " a; [[ "$a" =~ ^[Yy] ]]; }
 # ------------------------------------------------------------------ 1. prerequisites
 bold "1. Checking tools"
 missing=()
-for t in git curl python3 ssh ssh-keygen; do
+# Public repositories are fetched over HTTPS without a key; private ones need SSH and a deploy key.
+if [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "https://api.github.com/repos/$REPO" 2>/dev/null)" = 200 ]; then
+  PUBLIC=1
+else
+  PUBLIC=0
+fi
+needed=(git curl python3); [ "$PUBLIC" = 1 ] || needed+=(ssh ssh-keygen)
+for t in "${needed[@]}"; do
   if command -v "$t" >/dev/null; then ok "$t"; else missing+=("$t"); warn "$t missing"; fi
 done
 if command -v docker >/dev/null && docker compose version >/dev/null 2>&1 || sudo -n docker compose version >/dev/null 2>&1; then
@@ -48,10 +61,18 @@ if [ "${#missing[@]}" -gt 0 ] && command -v apt-get >/dev/null; then
     sudo apt-get update -qq && sudo apt-get install -y $pkgs
   fi
 fi
-for t in git curl python3 ssh ssh-keygen; do command -v "$t" >/dev/null || die "$t is required."; done
+for t in "${needed[@]}"; do command -v "$t" >/dev/null || die "$t is required."; done
 
 # ------------------------------------------------------------------ 2. deploy key
 bold "2. Read-only access to $REPO"
+if [ -n "${MYTERM_TOOLS_REMOTE:-}" ]; then   # override only for testing
+  REMOTE="$MYTERM_TOOLS_REMOTE"
+  ok "using $REMOTE"
+elif [ "$PUBLIC" = 1 ]; then
+  REMOTE="$REMOTE_HTTPS"
+  ok "$REPO is public: no deploy key needed"
+else
+REMOTE="$REMOTE_SSH"
 mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"
 if [ ! -f "$KEY" ]; then
   ssh-keygen -q -t ed25519 -N "" -C "$HOST myterm tools (read-only)" -f "$KEY"
@@ -80,6 +101,7 @@ if [[ "$(reply)" != *"successfully authenticated"* ]]; then
   [[ "$r" == *"successfully authenticated"* ]] || die "GitHub still refuses the key: $r"
 fi
 ok "GitHub accepts the key"
+fi
 
 # ------------------------------------------------------------------ 3. the scripts
 bold "3. Fetching the scripts"
@@ -129,6 +151,10 @@ fi
 # ------------------------------------------------------------------ 6. token for deploy-apk.sh
 bold "6. GitHub token for deploy-apk.sh (optional)"
 TOKEN_FILE="$HOME/.config/apk/github.token"
+if [ "$PUBLIC" = 1 ]; then
+  echo "  $REPO is public, so MyTerm's apps and command line download without one;"
+  echo "  a token is only needed for your private repositories."
+fi
 if [ -s "$TOKEN_FILE" ]; then
   ok "token already in $TOKEN_FILE"
 elif yes_no "Set up deploy-apk.sh now (needs a read-only GitHub token)?"; then
