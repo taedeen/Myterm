@@ -78,7 +78,7 @@ The app needs Android 11 (API 30) or later, for per-use Keystore authentication.
 
 ## Status
 
-Version 0.4.0 (see [CHANGELOG.md](CHANGELOG.md)).
+Version 0.5.0 (see [CHANGELOG.md](CHANGELOG.md)).
 
 | Part | State |
 |---|---|

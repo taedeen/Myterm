@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
+
+**Ready for a public repository, with a user guide.**
 
 - **Server tools work with a public repository:** `bootstrap.sh` and
   `upgrade.sh` fetch over HTTPS without a deploy key, release downloads need no
