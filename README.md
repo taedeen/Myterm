@@ -6,7 +6,7 @@ A multi-platform SSH management tool: connect to many hosts, with autocomplete, 
 
 **Using MyTerm:** see the [user guide](docs/user-guide.md): deploying the sync server, installing the apps, and everyday use.
 
-#The phone app needs Android 11 (API 30) or later, for per-use Keystore authentication.
+The phone app needs Android 11 (API 30) or later, for per-use Keystore authentication.
 
 ## Security notes
 
@@ -17,5 +17,5 @@ A multi-platform SSH management tool: connect to many hosts, with autocomplete, 
 
 ## Status
 
-Version 0.5.0 (see [CHANGELOG.md](CHANGELOG.md)).
+Version 0.5.1 (see [CHANGELOG.md](CHANGELOG.md)).
 
