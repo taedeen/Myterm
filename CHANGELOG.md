@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.1
+
+**Security update.** The SSH library (russh) is updated from 0.54 to 0.65.2,
+fixing the russh advisories GitHub reported. The ones that affect MyTerm, as
+an SSH client, all need a malicious or compromised server or jump host, and
+could crash a session or use up memory; none exposes passwords or keys:
+
+- channel messages for channels the client never opened were accepted, so a
+  server could forge a command's exit status (GHSA-47hw-gvq5-r2gm);
+- oversized fields, decompressed packets and EXT_INFO messages could exhaust
+  memory;
+- malformed key-exchange replies could crash the session.
+
+Host certificates offered by a server are checked by the key they certify,
+as before. Hardware-key sign-in is unchanged for users.
+
 ## 0.5.0
 
 **Ready for a public repository, with a user guide.**

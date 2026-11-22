@@ -8,7 +8,8 @@ rust-version.workspace = true
 
 [dependencies]
 myterm-core = { path = "../core" }
-russh = "0.54"
+# 0.65.2: fixes the russh advisories up to 2026-11 (GHSA-47hw-gvq5-r2gm and others)
+russh = "0.65.2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net"] }
 async-trait = "0.1"
 thiserror = "2"
